@@ -25,6 +25,21 @@ use windows::{
         PrjStopVirtualizing,
         PRJ_CALLBACKS,
         PRJ_NAMESPACE_VIRTUALIZATION_CONTEXT,
+        PRJ_NOTIFICATION_MAPPING,
+        PRJ_NOTIFY_FILE_HANDLE_CLOSED_FILE_DELETED,
+        PRJ_NOTIFY_FILE_HANDLE_CLOSED_FILE_MODIFIED,
+        PRJ_NOTIFY_FILE_HANDLE_CLOSED_NO_MODIFICATION,
+        PRJ_NOTIFY_FILE_OPENED,
+        PRJ_NOTIFY_FILE_OVERWRITTEN,
+        PRJ_NOTIFY_FILE_PRE_CONVERT_TO_FULL,
+        PRJ_NOTIFY_FILE_RENAMED,
+        PRJ_NOTIFY_HARDLINK_CREATED,
+        PRJ_NOTIFY_NEW_FILE_CREATED,
+        PRJ_NOTIFY_PRE_DELETE,
+        PRJ_NOTIFY_PRE_RENAME,
+        PRJ_NOTIFY_PRE_SET_HARDLINK,
+        PRJ_NOTIFY_TYPES,
+        PRJ_STARTVIRTUALIZING_OPTIONS,
     },
 };
 
@@ -137,6 +152,8 @@ pub struct ProjectedFileSystem {
     virtualization_context: PRJ_NAMESPACE_VIRTUALIZATION_CONTEXT,
 }
 
+static EMPTY_U16_STRING: &'static [u16] = &[0];
+
 impl ProjectedFileSystem {
     pub fn new(root: &Path, source: impl ProjectedFileSystemSource + 'static) -> Result<Self> {
         let instance_id = GUID::new()?;
@@ -169,6 +186,7 @@ impl ProjectedFileSystem {
             GetPlaceholderInfoCallback: Some(native::get_placeholder_information_callback),
             GetFileDataCallback: Some(native::get_file_data_callback),
 
+            NotificationCallback: Some(native::notification_callback),
             ..Default::default()
         });
 
@@ -177,11 +195,34 @@ impl ProjectedFileSystem {
             let context = &mut *raw_context;
             let mut context = context.lock();
 
+            let notification_mask = 0
+                | PRJ_NOTIFY_FILE_HANDLE_CLOSED_FILE_DELETED.0
+                | PRJ_NOTIFY_FILE_HANDLE_CLOSED_FILE_MODIFIED.0
+                | PRJ_NOTIFY_FILE_HANDLE_CLOSED_NO_MODIFICATION.0
+                | PRJ_NOTIFY_FILE_OPENED.0
+                | PRJ_NOTIFY_FILE_OVERWRITTEN.0
+                | PRJ_NOTIFY_FILE_PRE_CONVERT_TO_FULL.0
+                | PRJ_NOTIFY_FILE_RENAMED.0
+                | PRJ_NOTIFY_HARDLINK_CREATED.0
+                | PRJ_NOTIFY_NEW_FILE_CREATED.0
+                | PRJ_NOTIFY_PRE_DELETE.0
+                | PRJ_NOTIFY_PRE_RENAME.0
+                | PRJ_NOTIFY_PRE_SET_HARDLINK.0;
+
+            let mut notification_mapping = PRJ_NOTIFICATION_MAPPING {
+                NotificationBitMask: PRJ_NOTIFY_TYPES(notification_mask),
+                NotificationRoot: PCWSTR(EMPTY_U16_STRING.as_ptr()),
+            };
+
+            let mut options = PRJ_STARTVIRTUALIZING_OPTIONS::default();
+            options.NotificationMappings = &mut notification_mapping;
+            options.NotificationMappingsCount = 1;
+
             context.virtualization_context = PrjStartVirtualizing(
                 PCWSTR(root_encoded.as_ptr()),
                 &*callbacks,
                 Some(raw_context as *const c_void),
-                None,
+                Some(&options),
             )
             .map_err(Error::StartProjection)?;
 
@@ -226,6 +267,7 @@ mod native {
             OsString,
         },
         mem,
+        ops::ControlFlow,
         os::windows::ffi::OsStringExt,
         path::PathBuf,
     };
@@ -243,6 +285,7 @@ mod native {
                 ERROR_INSUFFICIENT_BUFFER,
                 ERROR_IO_INCOMPLETE,
                 ERROR_OUTOFMEMORY,
+                STATUS_CANNOT_DELETE,
                 STATUS_SUCCESS,
             },
             Storage::ProjectedFileSystem::{
@@ -256,6 +299,20 @@ mod native {
                 PRJ_DIR_ENTRY_BUFFER_HANDLE,
                 PRJ_EXTENDED_INFO,
                 PRJ_FILE_BASIC_INFO,
+                PRJ_NOTIFICATION,
+                PRJ_NOTIFICATION_FILE_HANDLE_CLOSED_FILE_DELETED,
+                PRJ_NOTIFICATION_FILE_HANDLE_CLOSED_FILE_MODIFIED,
+                PRJ_NOTIFICATION_FILE_HANDLE_CLOSED_NO_MODIFICATION,
+                PRJ_NOTIFICATION_FILE_OPENED,
+                PRJ_NOTIFICATION_FILE_OVERWRITTEN,
+                PRJ_NOTIFICATION_FILE_PRE_CONVERT_TO_FULL,
+                PRJ_NOTIFICATION_FILE_RENAMED,
+                PRJ_NOTIFICATION_HARDLINK_CREATED,
+                PRJ_NOTIFICATION_NEW_FILE_CREATED,
+                PRJ_NOTIFICATION_PARAMETERS,
+                PRJ_NOTIFICATION_PRE_DELETE,
+                PRJ_NOTIFICATION_PRE_RENAME,
+                PRJ_NOTIFICATION_PRE_SET_HARDLINK,
                 PRJ_PLACEHOLDER_INFO,
             },
         },
@@ -269,6 +326,10 @@ mod native {
         aligned_buffer::PrjAlignedBuffer,
         utils::io_result_to_hresult,
         DirectoryEntry,
+        FileCloseAction,
+        FileRenameInfo,
+        Notification,
+        ProjectedFile,
     };
 
     impl DirectoryEntry {
@@ -537,5 +598,84 @@ mod native {
         }
 
         STATUS_SUCCESS.to_hresult()
+    }
+
+    pub unsafe extern "system" fn notification_callback(
+        callback_data: *const PRJ_CALLBACK_DATA,
+        is_directory: BOOLEAN,
+        notification: PRJ_NOTIFICATION,
+        destination_filename: PCWSTR,
+        _operation_parameters: *mut PRJ_NOTIFICATION_PARAMETERS,
+    ) -> HRESULT {
+        let callback_data = &*callback_data;
+
+        let context = &mut *(callback_data.InstanceContext as *mut RawProjectionContext);
+
+        let target_file = ProjectedFile {
+            file_id: callback_data.FileId.to_u128(),
+            is_directory: is_directory.as_bool(),
+            path: PathBuf::from(OsString::from_wide(callback_data.FilePathName.as_wide())),
+        };
+
+        let notification = match notification {
+            PRJ_NOTIFICATION_NEW_FILE_CREATED => Notification::FileCreated(target_file),
+            PRJ_NOTIFICATION_FILE_OPENED => Notification::FileOpened(target_file),
+            PRJ_NOTIFICATION_FILE_HANDLE_CLOSED_FILE_DELETED => {
+                Notification::FileClosed(target_file, FileCloseAction::Deleted)
+            }
+            PRJ_NOTIFICATION_FILE_HANDLE_CLOSED_FILE_MODIFIED => {
+                Notification::FileClosed(target_file, FileCloseAction::Modified)
+            }
+            PRJ_NOTIFICATION_FILE_HANDLE_CLOSED_NO_MODIFICATION => {
+                Notification::FileClosed(target_file, FileCloseAction::NoModification)
+            }
+            PRJ_NOTIFICATION_FILE_OVERWRITTEN => Notification::FileOverwritten(target_file),
+
+            PRJ_NOTIFICATION_PRE_RENAME => {
+                let destination =
+                    PathBuf::from(OsString::from_wide(destination_filename.as_wide()));
+                Notification::PreFileRename(FileRenameInfo {
+                    source: Some(target_file.path),
+                    destination: Some(destination),
+                })
+            }
+            PRJ_NOTIFICATION_FILE_RENAMED => {
+                let destination =
+                    PathBuf::from(OsString::from_wide(destination_filename.as_wide()));
+                Notification::FileRenamed(FileRenameInfo {
+                    source: Some(target_file.path),
+                    destination: Some(destination),
+                })
+            }
+
+            PRJ_NOTIFICATION_PRE_SET_HARDLINK => Notification::PreSetHardlink(target_file),
+            PRJ_NOTIFICATION_HARDLINK_CREATED => Notification::HardlinkCreated(target_file),
+
+            PRJ_NOTIFICATION_FILE_PRE_CONVERT_TO_FULL => {
+                Notification::FilePreConvertToFull(target_file)
+            }
+            PRJ_NOTIFICATION_PRE_DELETE => Notification::PreFileDelete(target_file),
+
+            notification => {
+                log::warn!("Invalid notification {}", notification.0);
+                return STATUS_SUCCESS.to_hresult();
+            }
+        };
+
+        let context = context.lock();
+        let action = context.source.handle_notification(&notification);
+        if matches!(action, ControlFlow::Break(_)) {
+            if !notification.is_cancelable() {
+                log::warn!(
+                    "Tried to cancel a non cancelable action: {:?}",
+                    notification
+                );
+                STATUS_SUCCESS.to_hresult()
+            } else {
+                STATUS_CANNOT_DELETE.to_hresult()
+            }
+        } else {
+            STATUS_SUCCESS.to_hresult()
+        }
     }
 }
