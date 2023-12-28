@@ -1,5 +1,5 @@
 [package]
-name = "example-virtual-fs"
+name = "example-reg-fs"
 version = "0.1.0"
 edition = "2021"
 
@@ -9,3 +9,4 @@ clap = { version = "4.4.11", features = ["derive"] }
 env_logger = "0.10.1"
 log = "0.4.20"
 windows-projfs = { version = "0.1.0", path = "../../windows-projfs" }
+winreg = "0.52.0"

@@ -31,7 +31,7 @@ use windows::{
 use crate::{
     DirectoryEntry,
     Error,
-    ProjectedSource,
+    ProjectedFileSystemSource,
     Result,
 };
 
@@ -114,7 +114,7 @@ impl DirectoryIteration {
 
 struct ProjectionContext {
     instance_id: GUID,
-    source: Box<dyn ProjectedSource>,
+    source: Box<dyn ProjectedFileSystemSource>,
     virtualization_context: PRJ_NAMESPACE_VIRTUALIZATION_CONTEXT,
 
     directory_enumerations: BTreeMap<u128, DirectoryIteration>,
@@ -154,7 +154,7 @@ pub struct ProjectedFileSystem {
 }
 
 impl ProjectedFileSystem {
-    pub fn new(root: &Path, source: impl ProjectedSource + 'static) -> Result<Self> {
+    pub fn new(root: &Path, source: impl ProjectedFileSystemSource + 'static) -> Result<Self> {
         let instance_id = GUID::new()?;
         let mut root_encoded = root.to_string_lossy().encode_utf16().collect::<Vec<_>>();
         root_encoded.push(0);
