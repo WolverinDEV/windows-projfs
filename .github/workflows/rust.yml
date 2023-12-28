@@ -44,6 +44,8 @@ jobs:
         run: cargo build --all-targets
       - name: Test
         run: cargo test
+        env:
+          RUST_LOG: trace
   deploy:
     runs-on: windows-latest
     needs: tests
