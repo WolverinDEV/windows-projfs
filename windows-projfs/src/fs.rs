@@ -1,4 +1,5 @@
 use std::{
+    self,
     cell::RefCell,
     collections::{
         btree_map::Entry,
@@ -13,6 +14,7 @@ use std::{
     rc::Rc,
 };
 
+use parking_lot::Mutex;
 use windows::{
     core::{
         GUID,
@@ -105,6 +107,7 @@ impl DirectoryIteration {
     }
 }
 
+type RawProjectionContext = Mutex<ProjectionContext>;
 struct ProjectionContext {
     instance_id: GUID,
     source: Box<dyn ProjectedFileSystemSource>,
@@ -143,7 +146,7 @@ impl Drop for ProjectionContext {
 }
 
 pub struct ProjectedFileSystem {
-    _context: Pin<Box<ProjectionContext>>,
+    _context: Pin<Box<Mutex<ProjectionContext>>>,
 }
 
 impl ProjectedFileSystem {
@@ -164,12 +167,12 @@ impl ProjectedFileSystem {
         }
         .map_err(Error::MarkProjectionRoot)?;
 
-        let mut context = Box::pin(ProjectionContext {
+        let context = Box::pin(Mutex::new(ProjectionContext {
             instance_id,
             source: Box::new(source),
             virtualization_context: PRJ_NAMESPACE_VIRTUALIZATION_CONTEXT::default(),
             directory_enumerations: Default::default(),
-        });
+        }));
 
         let callbacks = Box::new(PRJ_CALLBACKS {
             StartDirectoryEnumerationCallback: Some(native::start_directory_enumeration_callback),
@@ -182,19 +185,23 @@ impl ProjectedFileSystem {
             ..Default::default()
         });
 
-        context.virtualization_context = unsafe {
-            PrjStartVirtualizing(
-                PCWSTR(root_encoded.as_ptr()),
-                &*callbacks,
-                Some(&*context as *const _ as *const c_void),
-                None,
-            )
+        {
+            let raw_context = &*context as *const _;
+            let mut context = context.lock();
+            context.virtualization_context = unsafe {
+                PrjStartVirtualizing(
+                    PCWSTR(root_encoded.as_ptr()),
+                    &*callbacks,
+                    Some(raw_context as *const c_void),
+                    None,
+                )
+            }
+            .map_err(Error::StartProjection)?;
         }
-        .map_err(Error::StartProjection)?;
 
         log::debug!(
             "Started projection {:X} at {}",
-            context.instance_id.to_u128(),
+            instance_id.to_u128(),
             root.to_string_lossy()
         );
         Ok(Self { _context: context })
@@ -243,10 +250,12 @@ mod native {
         },
     };
 
-    use super::FileNameU16Cache;
+    use super::{
+        FileNameU16Cache,
+        RawProjectionContext,
+    };
     use crate::{
         aligned_buffer::PrjAlignedBuffer,
-        fs::ProjectionContext,
         utils::io_result_to_hresult,
         DirectoryEntry,
     };
@@ -293,10 +302,14 @@ mod native {
         let callback_data = &*callback_data;
         let enumeration_id = &*enumeration_id;
 
-        let context = &mut *(callback_data.InstanceContext as *mut ProjectionContext);
+        let context = &mut *(callback_data.InstanceContext as *mut RawProjectionContext);
         let path = PathBuf::from(OsString::from_wide(callback_data.FilePathName.as_wide()));
 
-        context.register_enumeration(path, enumeration_id.to_u128());
+        {
+            let mut context = context.lock();
+            context.register_enumeration(path, enumeration_id.to_u128());
+        }
+
         STATUS_SUCCESS.to_hresult()
     }
 
@@ -307,9 +320,13 @@ mod native {
         let callback_data = &*callback_data;
         let enumeration_id = *enumeration_id;
 
-        let context = &mut *(callback_data.InstanceContext as *mut ProjectionContext);
+        let context = &mut *(callback_data.InstanceContext as *mut RawProjectionContext);
+        let success = {
+            let mut context = context.lock();
+            context.finish_enumeration(enumeration_id.to_u128())
+        };
 
-        if context.finish_enumeration(enumeration_id.to_u128()) {
+        if success {
             STATUS_SUCCESS.to_hresult()
         } else {
             log::warn!(
@@ -329,7 +346,9 @@ mod native {
         let callback_data = &*callback_data;
         let enumeration_id = &*enumeration_id;
 
-        let context = &mut *(callback_data.InstanceContext as *mut ProjectionContext);
+        let context = &mut *(callback_data.InstanceContext as *mut RawProjectionContext);
+        let mut context = context.lock();
+
         let enumeration = match context
             .directory_enumerations
             .get_mut(&enumeration_id.to_u128())
@@ -393,9 +412,10 @@ mod native {
     ) -> HRESULT {
         let callback_data = &*callback_data;
 
-        let context = &mut *(callback_data.InstanceContext as *mut ProjectionContext);
+        let context = &mut *(callback_data.InstanceContext as *mut RawProjectionContext);
         let path = PathBuf::from(OsString::from_wide(callback_data.FilePathName.as_wide()));
 
+        let context = context.lock();
         let entry = match context.source.get_directory_entry(&path) {
             Some(entry) => entry,
             None => return ERROR_FILE_NOT_FOUND.to_hresult(),
@@ -444,9 +464,10 @@ mod native {
         let length = length as usize;
         let callback_data = &*callback_data;
 
-        let context = &mut *(callback_data.InstanceContext as *mut ProjectionContext);
+        let context = &mut *(callback_data.InstanceContext as *mut RawProjectionContext);
         let path = PathBuf::from(OsString::from_wide(callback_data.FilePathName.as_wide()));
 
+        let context = context.lock();
         let mut source = match {
             context
                 .source
