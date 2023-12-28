@@ -2,6 +2,11 @@
 name = "windows-projfs"
 version = "0.1.0"
 edition = "2021"
+authors = ["M. Hadenfeldt <git@did.science>"]
+description = "A rust library for the Windows projected file system API"
+repository = "https://github.com/WolverinDEV/windows-projfs"
+license = "GPL-2.0"
+readme = "../README.MD"
 
 [dependencies]
 log = "0.4.20"
