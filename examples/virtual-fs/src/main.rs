@@ -1,15 +1,11 @@
 use std::{
-    ffi::OsStr,
     fs,
     io::{
         self,
         Cursor,
         Read,
     },
-    path::{
-        Path,
-        PathBuf,
-    },
+    path::PathBuf,
 };
 
 use clap::Parser;
@@ -21,13 +17,8 @@ use windows_projfs::{
     ProjectedFileSystemSource,
 };
 
-struct PFSBackend {}
-impl PFSBackend {
-    pub fn new() -> Self {
-        Self {}
-    }
-}
-impl ProjectedFileSystemSource for PFSBackend {
+struct VirtualProjectedSource;
+impl ProjectedFileSystemSource for VirtualProjectedSource {
     fn list_directory(&self, path: &std::path::Path) -> Vec<windows_projfs::DirectoryEntry> {
         if path.display().to_string().is_empty() {
             vec![
@@ -45,15 +36,6 @@ impl ProjectedFileSystemSource for PFSBackend {
         } else {
             vec![]
         }
-    }
-
-    fn get_directory_entry(&self, path: &std::path::Path) -> Option<DirectoryEntry> {
-        let directory = path.parent().map(Path::to_path_buf).unwrap_or_default();
-        let file_name = path.file_name().map(OsStr::to_string_lossy)?;
-
-        self.list_directory(&directory)
-            .into_iter()
-            .find(|entry| entry.name() == file_name)
     }
 
     fn stream_file_content(
@@ -95,8 +77,7 @@ fn main() -> anyhow::Result<()> {
 
     log::info!("Starting projected file system ({})", args.root.display());
     {
-        let backend = Box::new(PFSBackend::new());
-        let _pfs = ProjectedFileSystem::new(args.root.clone(), backend)?;
+        let _pfs = ProjectedFileSystem::new(&args.root, VirtualProjectedSource::new())?;
         pause();
     }
     log::info!("Stopped projected file system. Cleaning up root.");
