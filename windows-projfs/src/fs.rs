@@ -10,7 +10,6 @@ use std::{
         Path,
         PathBuf,
     },
-    pin::Pin,
     rc::Rc,
 };
 
@@ -109,7 +108,6 @@ impl DirectoryIteration {
 
 type RawProjectionContext = Mutex<ProjectionContext>;
 struct ProjectionContext {
-    instance_id: GUID,
     source: Box<dyn ProjectedFileSystemSource>,
     virtualization_context: PRJ_NAMESPACE_VIRTUALIZATION_CONTEXT,
 
@@ -133,20 +131,10 @@ impl ProjectionContext {
     }
 }
 
-impl Drop for ProjectionContext {
-    fn drop(&mut self) {
-        if self.virtualization_context.is_invalid() {
-            /* context never started */
-            return;
-        }
-
-        log::debug!("Stopping projection for {:X}", self.instance_id.to_u128());
-        unsafe { PrjStopVirtualizing(self.virtualization_context) };
-    }
-}
-
 pub struct ProjectedFileSystem {
-    _context: Pin<Box<Mutex<ProjectionContext>>>,
+    instance_id: GUID,
+    raw_context: *mut Mutex<ProjectionContext>,
+    virtualization_context: PRJ_NAMESPACE_VIRTUALIZATION_CONTEXT,
 }
 
 impl ProjectedFileSystem {
@@ -167,8 +155,7 @@ impl ProjectedFileSystem {
         }
         .map_err(Error::MarkProjectionRoot)?;
 
-        let context = Box::pin(Mutex::new(ProjectionContext {
-            instance_id,
+        let context = Box::new(Mutex::new(ProjectionContext {
             source: Box::new(source),
             virtualization_context: PRJ_NAMESPACE_VIRTUALIZATION_CONTEXT::default(),
             directory_enumerations: Default::default(),
@@ -185,26 +172,50 @@ impl ProjectedFileSystem {
             ..Default::default()
         });
 
-        {
-            let raw_context = &*context as *const _;
+        let raw_context = Box::into_raw(context);
+        let virtualization_context = unsafe {
+            let context = &mut *raw_context;
             let mut context = context.lock();
-            context.virtualization_context = unsafe {
-                PrjStartVirtualizing(
-                    PCWSTR(root_encoded.as_ptr()),
-                    &*callbacks,
-                    Some(raw_context as *const c_void),
-                    None,
-                )
-            }
+
+            context.virtualization_context = PrjStartVirtualizing(
+                PCWSTR(root_encoded.as_ptr()),
+                &*callbacks,
+                Some(raw_context as *const c_void),
+                None,
+            )
             .map_err(Error::StartProjection)?;
-        }
+
+            context.virtualization_context
+        };
 
         log::debug!(
             "Started projection {:X} at {}",
             instance_id.to_u128(),
             root.to_string_lossy()
         );
-        Ok(Self { _context: context })
+        Ok(Self {
+            instance_id,
+            raw_context,
+            virtualization_context,
+        })
+    }
+}
+
+impl Drop for ProjectedFileSystem {
+    fn drop(&mut self) {
+        log::trace!("Stopping projection for {:X}", self.instance_id.to_u128());
+
+        /* Shutdown projection */
+        unsafe { PrjStopVirtualizing(self.virtualization_context) };
+
+        /*
+         * Await every currently executing call, before deallocating the raw context.
+         * No new calls for the callbacks should occurr, as the projection has been stopped.
+         */
+        let context = unsafe { Box::from_raw(self.raw_context) };
+        let _context = context.lock();
+
+        log::debug!("Stopped projection for {:X}", self.instance_id.to_u128());
     }
 }
 
