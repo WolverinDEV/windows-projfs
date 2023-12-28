@@ -11,3 +11,8 @@ windows = { version = "0.52.0", features = [
     "Win32_Storage_ProjectedFileSystem",
     "Win32_Foundation",
 ] }
+
+[dev-dependencies]
+tempdir = "0.3.7"
+anyhow = "1.0.77"
+env_logger = "0.10.1"

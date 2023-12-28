@@ -6,7 +6,10 @@ use std::{
         BTreeMap,
     },
     ffi::c_void,
-    path::PathBuf,
+    path::{
+        Path,
+        PathBuf,
+    },
     pin::Pin,
     rc::Rc,
 };
@@ -28,7 +31,7 @@ use windows::{
 use crate::{
     DirectoryEntry,
     Error,
-    ProjectedFileSystemSource,
+    ProjectedSource,
     Result,
 };
 
@@ -111,7 +114,7 @@ impl DirectoryIteration {
 
 struct ProjectionContext {
     instance_id: GUID,
-    source: Box<dyn ProjectedFileSystemSource>,
+    source: Box<dyn ProjectedSource>,
     virtualization_context: PRJ_NAMESPACE_VIRTUALIZATION_CONTEXT,
 
     directory_enumerations: BTreeMap<u128, DirectoryIteration>,
@@ -151,7 +154,7 @@ pub struct ProjectedFileSystem {
 }
 
 impl ProjectedFileSystem {
-    pub fn new(root: PathBuf, source: Box<dyn ProjectedFileSystemSource>) -> Result<Self> {
+    pub fn new(root: &Path, source: impl ProjectedSource + 'static) -> Result<Self> {
         let instance_id = GUID::new()?;
         let mut root_encoded = root.to_string_lossy().encode_utf16().collect::<Vec<_>>();
         root_encoded.push(0);
@@ -170,7 +173,7 @@ impl ProjectedFileSystem {
 
         let mut context = Box::pin(ProjectionContext {
             instance_id,
-            source,
+            source: Box::new(source),
             virtualization_context: PRJ_NAMESPACE_VIRTUALIZATION_CONTEXT::default(),
             directory_enumerations: Default::default(),
         });
@@ -266,13 +269,18 @@ mod native {
                 Self::File(file) => {
                     basic_info.IsDirectory = BOOLEAN::from(false);
 
-                    basic_info.FileSize = file.file_size;
+                    basic_info.FileSize = file.file_size as i64;
                     basic_info.FileAttributes = file.file_attributes;
 
-                    basic_info.CreationTime = file.creation_time;
-                    basic_info.LastAccessTime = file.last_access_time;
-                    basic_info.LastWriteTime = file.last_write_time;
-                    basic_info.ChangeTime = file.change_time;
+                    basic_info.CreationTime = file.creation_time as i64;
+                    basic_info.LastAccessTime = file.last_access_time as i64;
+                    basic_info.LastWriteTime = file.last_write_time as i64;
+
+                    /*
+                     * ChangeTime includes metadata changes, but we merge these together.
+                     * Source: https://web.archive.org/web/20230404085857/https://devblogs.microsoft.com/oldnewthing/20100709-00/?p=13463
+                     */
+                    basic_info.ChangeTime = file.last_write_time as i64;
                 }
             };
 
@@ -438,6 +446,7 @@ mod native {
         byte_offset: u64,
         length: u32,
     ) -> HRESULT {
+        let length = length as usize;
         let callback_data = &*callback_data;
 
         let context = &mut *(callback_data.InstanceContext as *mut ProjectionContext);
@@ -469,9 +478,11 @@ mod native {
             };
         let buffer = buffer.buffer();
 
-        let mut pending_length = length as usize;
-        while pending_length > 0 {
-            let chunk_length = pending_length.min(buffer.len());
+        let mut bytes_written = 0;
+        while bytes_written < length {
+            let bytes_pending = length - bytes_written;
+            let chunk_length = bytes_pending.min(buffer.len());
+
             if let Err(err) = source.read_exact(&mut buffer[0..chunk_length]) {
                 log::debug!("IO error for reading {} bytes: {}", chunk_length, err);
                 return io_result_to_hresult(err);
@@ -482,15 +493,20 @@ mod native {
                     context.virtualization_context,
                     &callback_data.DataStreamId,
                     buffer.as_ptr() as *const c_void,
-                    byte_offset,
+                    byte_offset + bytes_written as u64,
                     chunk_length as u32,
                 )
             };
             if let Err(err) = write_result {
+                log::warn!(
+                    "Failed to write projected file data for {}: {}",
+                    path.display(),
+                    err
+                );
                 return err.code();
             }
 
-            pending_length -= chunk_length;
+            bytes_written += chunk_length;
         }
 
         STATUS_SUCCESS.to_hresult()
