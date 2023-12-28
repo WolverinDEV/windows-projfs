@@ -17,7 +17,7 @@ use windows_projfs::{
     DirectoryInfo,
     FileInfo,
     ProjectedFileSystem,
-    ProjectedSource,
+    ProjectedFileSystemSource,
 };
 
 #[derive(Debug, Default)]
@@ -25,7 +25,7 @@ struct TestProjectionSource {
     content: BTreeMap<PathBuf, Vec<u8>>,
 }
 
-impl ProjectedSource for TestProjectionSource {
+impl ProjectedFileSystemSource for TestProjectionSource {
     fn list_directory(&self, target: &std::path::Path) -> Vec<windows_projfs::DirectoryEntry> {
         self.content
             .iter()
@@ -86,7 +86,7 @@ impl ProjectedSource for TestProjectionSource {
 
 #[test]
 fn small_file_content() -> anyhow::Result<()> {
-    env_logger::init();
+    let _ = env_logger::try_init();
 
     let target_dir = TempDir::new("test_file_content")?;
     let target_dir = target_dir.path();
@@ -114,7 +114,7 @@ fn small_file_content() -> anyhow::Result<()> {
 
 #[test]
 fn file_not_found() -> anyhow::Result<()> {
-    env_logger::init();
+    let _ = env_logger::try_init();
 
     let target_dir = TempDir::new("test_file_not_found")?;
     let target_dir = target_dir.path();
@@ -130,22 +130,10 @@ fn file_not_found() -> anyhow::Result<()> {
     );
 
     let _pfs = ProjectedFileSystem::new(target_dir, pfs_source)?;
-    assert!(matches!(
-        fs::read(target_dir.join("file_existing.txt")),
-        Ok(_)
-    ));
-    assert!(matches!(
-        fs::read(target_dir.join("sub-dir/file_existing.txt")),
-        Ok(_)
-    ));
-    assert!(matches!(
-        fs::read(target_dir.join("file_not_existing.txt")),
-        Err(_)
-    ));
-    assert!(matches!(
-        fs::read(target_dir.join("sub-dir-x/file_existing.txt")),
-        Err(_)
-    ));
+    assert!(fs::read(target_dir.join("file_existing.txt")).is_ok());
+    assert!(fs::read(target_dir.join("sub-dir/file_existing.txt")).is_ok());
+    assert!(fs::read(target_dir.join("file_not_existing.txt")).is_err());
+    assert!(fs::read(target_dir.join("sub-dir-x/file_existing.txt")).is_err());
 
     match fs::read_to_string(target_dir.join("file_not_existing.txt")) {
         Err(err) => {
@@ -167,7 +155,7 @@ fn file_not_found() -> anyhow::Result<()> {
 #[test]
 fn file_content_large() -> anyhow::Result<()> {
     const CONTENT_LENGTH: usize = 1024 * 1024 * 64 + 766;
-    env_logger::init();
+    let _ = env_logger::try_init();
 
     let target_dir = TempDir::new("test_file_content_large")?;
     let target_dir = target_dir.path();

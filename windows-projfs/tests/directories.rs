@@ -11,7 +11,7 @@ use windows_projfs::{
     DirectoryInfo,
     FileInfo,
     ProjectedFileSystem,
-    ProjectedSource,
+    ProjectedFileSystemSource,
 };
 
 #[derive(Debug, Default)]
@@ -19,7 +19,7 @@ struct TestProjectionSource {
     entries: BTreeMap<PathBuf, Vec<DirectoryEntry>>,
 }
 
-impl ProjectedSource for TestProjectionSource {
+impl ProjectedFileSystemSource for TestProjectionSource {
     fn list_directory(&self, path: &std::path::Path) -> Vec<DirectoryEntry> {
         self.entries.get(path).cloned().unwrap_or_default()
     }
@@ -35,7 +35,7 @@ impl ProjectedSource for TestProjectionSource {
 
 #[test]
 fn directory_metadata() -> anyhow::Result<()> {
-    env_logger::init();
+    let _ = env_logger::try_init();
 
     let target_dir = TempDir::new("test_directory_entries")?;
     let target_dir = target_dir.path();

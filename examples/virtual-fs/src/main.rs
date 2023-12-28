@@ -23,8 +23,7 @@ impl ProjectedFileSystemSource for VirtualProjectedSource {
         if path.display().to_string().is_empty() {
             vec![
                 DirectoryEntry::Directory(DirectoryInfo {
-                    name: format!("test-dir"),
-                    ..Default::default()
+                    name: "test-dir".to_string(),
                 }),
                 DirectoryEntry::File(FileInfo {
                     file_name: "test.txt".to_string(),
@@ -77,7 +76,7 @@ fn main() -> anyhow::Result<()> {
 
     log::info!("Starting projected file system ({})", args.root.display());
     {
-        let _pfs = ProjectedFileSystem::new(&args.root, VirtualProjectedSource::new())?;
+        let _pfs = ProjectedFileSystem::new(&args.root, VirtualProjectedSource {})?;
         pause();
     }
     log::info!("Stopped projected file system. Cleaning up root.");

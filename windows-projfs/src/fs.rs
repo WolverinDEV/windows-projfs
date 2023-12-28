@@ -1,6 +1,5 @@
 use std::{
     cell::RefCell,
-    cmp::Ordering,
     collections::{
         btree_map::Entry,
         BTreeMap,
@@ -74,13 +73,7 @@ impl DirectoryIteration {
                 let name_b = name_cache.get_or_cache(b.name().to_string()).as_ptr();
 
                 let result = unsafe { PrjFileNameCompare(PCWSTR(name_a), PCWSTR(name_b)) };
-                if result < 0 {
-                    Ordering::Less
-                } else if result > 0 {
-                    Ordering::Greater
-                } else {
-                    Ordering::Equal
-                }
+                result.cmp(&0)
             }
         });
 
@@ -411,8 +404,10 @@ mod native {
         let mut name_cache = FileNameU16Cache::default();
         let name = name_cache.get_or_cache(path.display().to_string());
 
-        let mut placeholder_info = PRJ_PLACEHOLDER_INFO::default();
-        placeholder_info.FileBasicInfo = entry.get_basic_info();
+        let placeholder_info = PRJ_PLACEHOLDER_INFO {
+            FileBasicInfo: entry.get_basic_info(),
+            ..PRJ_PLACEHOLDER_INFO::default()
+        };
 
         let result = if let Some(extended_info) = entry.get_extended_info() {
             unsafe {
@@ -455,7 +450,7 @@ mod native {
         let mut source = match {
             context
                 .source
-                .stream_file_content(&path, byte_offset as usize, length as usize)
+                .stream_file_content(&path, byte_offset as usize, length)
         } {
             Ok(source) => source,
             Err(err) => {
@@ -466,7 +461,7 @@ mod native {
         };
 
         let chunk_length = if length <= 1024 * 1024 {
-            length as usize
+            length
         } else {
             1024 * 1024
         };

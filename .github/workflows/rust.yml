@@ -1,0 +1,46 @@
+name: Rust
+
+on:
+  push:
+  pull_request:
+
+# see https://matklad.github.io/2021/09/04/fast-rust-builds.html
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+  CARGO_NET_RETRY: 10
+  CI: 1
+  RUST_BACKTRACE: short
+  RUSTFLAGS: "-W rust-2021-compatibility"
+  RUSTUP_MAX_RETRIES: 10
+
+jobs:
+  fmt:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v3
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          # Required for some of the arguments
+          toolchain: nightly
+          components: rustfmt,clippy
+      - name: rustfmt
+        run: cargo fmt --all -- --check
+      - name: clippy
+        run: cargo clippy --all-targets
+  tests:
+    runs-on: windows-latest
+    needs: fmt
+    steps:
+      - uses: actions/checkout@v3
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Show version
+        run: |
+          rustup show
+          cargo --version
+          rustc --version
+      - name: Build
+        run: cargo build --all-targets
+      - name: Test
+        run: cargo test

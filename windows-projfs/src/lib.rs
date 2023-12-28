@@ -1,3 +1,6 @@
+#![deny(clippy::all)]
+#![allow(clippy::blocks_in_conditions)]
+
 mod error;
 pub use error::*;
 
