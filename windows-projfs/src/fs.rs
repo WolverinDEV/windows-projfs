@@ -76,6 +76,7 @@ struct DirectoryIteration {
     current_entry: usize,
 
     name_cache: Rc<RefCell<FileNameU16Cache>>,
+    search_expression: Option<Vec<u16>>,
 }
 
 impl DirectoryIteration {
@@ -100,6 +101,7 @@ impl DirectoryIteration {
             current_entry: 0,
 
             name_cache,
+            search_expression: None,
         }
     }
 
@@ -117,6 +119,7 @@ impl DirectoryIteration {
     }
 
     pub fn reset_enumeration(&mut self) {
+        self.search_expression = None;
         self.current_entry = 0;
     }
 }
@@ -286,6 +289,7 @@ mod native {
                 STATUS_SUCCESS,
             },
             Storage::ProjectedFileSystem::{
+                PrjFileNameMatch,
                 PrjFillDirEntryBuffer2,
                 PrjWriteFileData,
                 PrjWritePlaceholderInfo,
@@ -359,7 +363,6 @@ mod native {
         }
 
         fn get_extended_info(&self) -> Option<PRJ_EXTENDED_INFO> {
-            /* TODO: Symlinks */
             None
         }
     }
@@ -404,11 +407,22 @@ mod native {
     pub unsafe extern "system" fn get_directory_enumeration_callback(
         callback_data: *const PRJ_CALLBACK_DATA,
         enumeration_id: *const GUID,
-        _searchexpression: PCWSTR,
+        search_expression: PCWSTR,
         dir_entry_buffer_handle: PRJ_DIR_ENTRY_BUFFER_HANDLE,
     ) -> HRESULT {
         let enumeration_id = &*enumeration_id;
         let callback_data: CallbackData = callback_data.into();
+        let search_expression = if search_expression.is_null() {
+            None
+        } else {
+            let mut expression = search_expression.as_wide().to_vec();
+            if expression.len() > 0 {
+                expression.push(0);
+                Some(expression)
+            } else {
+                None
+            }
+        };
 
         callback_data.execute(move |callback_data| {
             let mut context = callback_data.context.lock();
@@ -421,38 +435,49 @@ mod native {
             if callback_data.flags.0 & PRJ_CB_DATA_FLAG_ENUM_RESTART_SCAN.0 > 0 {
                 enumeration.reset_enumeration();
             }
+            if let Some(search_expression) = search_expression {
+                /* Update the search expression if given. */
+                enumeration.search_expression = Some(search_expression);
+            }
 
             let name_cache = enumeration.name_cache.clone();
             while let Some(entry) = enumeration.peek_entry() {
                 let basic_info = entry.get_basic_info();
                 let extended_info = entry.get_extended_info();
 
-                /* TODO: Compare name with the search input! */
-
                 let mut name_cache = name_cache.borrow_mut();
                 let name = name_cache.get_or_cache(entry.name().to_string());
 
-                let result = unsafe {
-                    PrjFillDirEntryBuffer2(
-                        dir_entry_buffer_handle,
-                        PCWSTR(name.as_ptr()),
-                        Some(&basic_info),
-                        extended_info.map(|v| &v as *const _),
-                    )
+                let file_match = if let Some(search_expression) = enumeration.search_expression.as_ref() {
+                    unsafe {
+                        PrjFileNameMatch(PCWSTR(name.as_ptr()), PCWSTR(search_expression.as_ptr())).as_bool()
+                    }
+                } else {
+                    true
                 };
 
-                if let Err(err) = result {
-                    if err.code() == ERROR_INSUFFICIENT_BUFFER.to_hresult() {
-                        /* buffer full */
-                        break;
+                if file_match {
+                    let result = unsafe {
+                        PrjFillDirEntryBuffer2(
+                            dir_entry_buffer_handle,
+                            PCWSTR(name.as_ptr()),
+                            Some(&basic_info),
+                            extended_info.map(|v| &v as *const _),
+                        )
+                    };
+    
+                    if let Err(err) = result {
+                        if err.code() == ERROR_INSUFFICIENT_BUFFER.to_hresult() {
+                            /* buffer full */
+                            break;
+                        }
+    
+                        /* unexpected... */
+                        return Err(err.code());
                     }
-
-                    /* unexpected... */
-                    return Err(err.code());
                 }
 
                 enumeration.consume_entry();
-
                 if callback_data.flags.0 & PRJ_CB_DATA_FLAG_ENUM_RETURN_SINGLE_ENTRY.0 > 0 {
                     break;
                 }
