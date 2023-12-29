@@ -153,6 +153,7 @@ pub enum Notification {
 
 impl Notification {
     pub fn is_cancelable(&self) -> bool {
+        #[allow(clippy::match_like_matches_macro)]
         match self {
             Self::PreFileRename(_) => true,
             Self::PreFileDelete(_) => true,

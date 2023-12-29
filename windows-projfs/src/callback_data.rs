@@ -47,12 +47,10 @@ impl<'a, C> CallbackData<'a, C> {
     where
         F: FnOnce(&Self) -> Result<(), HRESULT>,
     {
-        let result = match executor(&self) {
+        match executor(&self) {
             Ok(_) => STATUS_SUCCESS.to_hresult(),
             Err(code) => code,
-        };
-
-        result
+        }
     }
 }
 

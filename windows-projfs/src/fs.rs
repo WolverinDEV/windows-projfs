@@ -153,7 +153,7 @@ pub struct ProjectedFileSystem {
     virtualization_context: PRJ_NAMESPACE_VIRTUALIZATION_CONTEXT,
 }
 
-static EMPTY_U16_STRING: &'static [u16] = &[0];
+static EMPTY_U16_STRING: &[u16] = &[0];
 impl ProjectedFileSystem {
     pub fn new(root: &Path, source: impl ProjectedFileSystemSource + 'static) -> Result<Self> {
         let instance_id = GUID::new()?;
@@ -191,6 +191,7 @@ impl ProjectedFileSystem {
 
         let raw_context = Box::into_raw(context);
         let virtualization_context = {
+            #[allow(clippy::identity_op)]
             let notification_mask = 0
                 | PRJ_NOTIFY_FILE_HANDLE_CLOSED_FILE_DELETED.0
                 | PRJ_NOTIFY_FILE_HANDLE_CLOSED_FILE_MODIFIED.0
@@ -210,9 +211,12 @@ impl ProjectedFileSystem {
                 NotificationRoot: PCWSTR(EMPTY_U16_STRING.as_ptr()),
             };
 
-            let mut options = PRJ_STARTVIRTUALIZING_OPTIONS::default();
-            options.NotificationMappings = &mut notification_mapping;
-            options.NotificationMappingsCount = 1;
+            let options = PRJ_STARTVIRTUALIZING_OPTIONS {
+                NotificationMappings: &mut notification_mapping,
+                NotificationMappingsCount: 1,
+
+                ..Default::default()
+            };
 
             let result = unsafe {
                 PrjStartVirtualizing(
@@ -416,11 +420,12 @@ mod native {
             None
         } else {
             let mut expression = search_expression.as_wide().to_vec();
-            if expression.len() > 0 {
+            if expression.is_empty() {
+                None
+            } else {
+                /* adding a zero just to ensure it's zero terminated */
                 expression.push(0);
                 Some(expression)
-            } else {
-                None
             }
         };
 
@@ -465,13 +470,13 @@ mod native {
                             extended_info.map(|v| &v as *const _),
                         )
                     };
-    
+
                     if let Err(err) = result {
                         if err.code() == ERROR_INSUFFICIENT_BUFFER.to_hresult() {
                             /* buffer full */
                             break;
                         }
-    
+
                         /* unexpected... */
                         return Err(err.code());
                     }
