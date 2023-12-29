@@ -6,7 +6,11 @@ use std::{
         self,
         Read,
     },
-    path::Path,
+    ops::ControlFlow,
+    path::{
+        Path,
+        PathBuf,
+    },
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
@@ -97,4 +101,65 @@ pub trait ProjectedFileSystemSource {
         byte_offset: usize,
         length: usize,
     ) -> std::io::Result<Box<dyn Read>>;
+
+    /// Handle file system notifications.
+    /// All pre-notifications can be cancelled.
+    fn handle_notification(&self, _notification: &Notification) -> ControlFlow<()> {
+        ControlFlow::Continue(())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub enum FileCloseAction {
+    /// File has been closed and deleted
+    Deleted,
+
+    /// File has been close and the contents modified
+    Modified,
+
+    /// File has been closed but the contents have not changed
+    NoModification,
+}
+
+#[derive(Default, Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub struct ProjectedFile {
+    pub file_id: u128,
+    pub is_directory: bool,
+    pub path: PathBuf,
+}
+
+#[derive(Default, Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub struct FileRenameInfo {
+    pub source: Option<PathBuf>,
+    pub destination: Option<PathBuf>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub enum Notification {
+    FileCreated(ProjectedFile),
+    FileOpened(ProjectedFile),
+    FileClosed(ProjectedFile, FileCloseAction),
+    FileOverwritten(ProjectedFile),
+
+    PreFileRename(FileRenameInfo),
+    FileRenamed(FileRenameInfo),
+
+    PreSetHardlink(ProjectedFile),
+    HardlinkCreated(ProjectedFile),
+
+    PreFileDelete(ProjectedFile),
+    FilePreConvertToFull(ProjectedFile),
+}
+
+impl Notification {
+    pub fn is_cancelable(&self) -> bool {
+        #[allow(clippy::match_like_matches_macro)]
+        match self {
+            Self::PreFileRename(_) => true,
+            Self::PreFileDelete(_) => true,
+            Self::PreSetHardlink(_) => true,
+            Self::FilePreConvertToFull(_) => true,
+            _ => false,
+        }
+    }
 }

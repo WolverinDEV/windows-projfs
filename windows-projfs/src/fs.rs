@@ -25,6 +25,21 @@ use windows::{
         PrjStopVirtualizing,
         PRJ_CALLBACKS,
         PRJ_NAMESPACE_VIRTUALIZATION_CONTEXT,
+        PRJ_NOTIFICATION_MAPPING,
+        PRJ_NOTIFY_FILE_HANDLE_CLOSED_FILE_DELETED,
+        PRJ_NOTIFY_FILE_HANDLE_CLOSED_FILE_MODIFIED,
+        PRJ_NOTIFY_FILE_HANDLE_CLOSED_NO_MODIFICATION,
+        PRJ_NOTIFY_FILE_OPENED,
+        PRJ_NOTIFY_FILE_OVERWRITTEN,
+        PRJ_NOTIFY_FILE_PRE_CONVERT_TO_FULL,
+        PRJ_NOTIFY_FILE_RENAMED,
+        PRJ_NOTIFY_HARDLINK_CREATED,
+        PRJ_NOTIFY_NEW_FILE_CREATED,
+        PRJ_NOTIFY_PRE_DELETE,
+        PRJ_NOTIFY_PRE_RENAME,
+        PRJ_NOTIFY_PRE_SET_HARDLINK,
+        PRJ_NOTIFY_TYPES,
+        PRJ_STARTVIRTUALIZING_OPTIONS,
     },
 };
 
@@ -61,6 +76,7 @@ struct DirectoryIteration {
     current_entry: usize,
 
     name_cache: Rc<RefCell<FileNameU16Cache>>,
+    search_expression: Option<Vec<u16>>,
 }
 
 impl DirectoryIteration {
@@ -85,6 +101,7 @@ impl DirectoryIteration {
             current_entry: 0,
 
             name_cache,
+            search_expression: None,
         }
     }
 
@@ -102,15 +119,14 @@ impl DirectoryIteration {
     }
 
     pub fn reset_enumeration(&mut self) {
+        self.search_expression = None;
         self.current_entry = 0;
     }
 }
 
-type RawProjectionContext = Mutex<ProjectionContext>;
-struct ProjectionContext {
+pub type RawProjectionContext = Mutex<ProjectionContext>;
+pub struct ProjectionContext {
     source: Box<dyn ProjectedFileSystemSource>,
-    virtualization_context: PRJ_NAMESPACE_VIRTUALIZATION_CONTEXT,
-
     directory_enumerations: BTreeMap<u128, DirectoryIteration>,
 }
 
@@ -133,10 +149,11 @@ impl ProjectionContext {
 
 pub struct ProjectedFileSystem {
     instance_id: GUID,
-    raw_context: *mut Mutex<ProjectionContext>,
+    raw_context: *mut RawProjectionContext,
     virtualization_context: PRJ_NAMESPACE_VIRTUALIZATION_CONTEXT,
 }
 
+static EMPTY_U16_STRING: &[u16] = &[0];
 impl ProjectedFileSystem {
     pub fn new(root: &Path, source: impl ProjectedFileSystemSource + 'static) -> Result<Self> {
         let instance_id = GUID::new()?;
@@ -157,7 +174,6 @@ impl ProjectedFileSystem {
 
         let context = Box::new(Mutex::new(ProjectionContext {
             source: Box::new(source),
-            virtualization_context: PRJ_NAMESPACE_VIRTUALIZATION_CONTEXT::default(),
             directory_enumerations: Default::default(),
         }));
 
@@ -169,23 +185,54 @@ impl ProjectedFileSystem {
             GetPlaceholderInfoCallback: Some(native::get_placeholder_information_callback),
             GetFileDataCallback: Some(native::get_file_data_callback),
 
+            NotificationCallback: Some(native::notification_callback),
             ..Default::default()
         });
 
         let raw_context = Box::into_raw(context);
-        let virtualization_context = unsafe {
-            let context = &mut *raw_context;
-            let mut context = context.lock();
+        let virtualization_context = {
+            #[allow(clippy::identity_op)]
+            let notification_mask = 0
+                | PRJ_NOTIFY_FILE_HANDLE_CLOSED_FILE_DELETED.0
+                | PRJ_NOTIFY_FILE_HANDLE_CLOSED_FILE_MODIFIED.0
+                | PRJ_NOTIFY_FILE_HANDLE_CLOSED_NO_MODIFICATION.0
+                | PRJ_NOTIFY_FILE_OPENED.0
+                | PRJ_NOTIFY_FILE_OVERWRITTEN.0
+                | PRJ_NOTIFY_FILE_PRE_CONVERT_TO_FULL.0
+                | PRJ_NOTIFY_FILE_RENAMED.0
+                | PRJ_NOTIFY_HARDLINK_CREATED.0
+                | PRJ_NOTIFY_NEW_FILE_CREATED.0
+                | PRJ_NOTIFY_PRE_DELETE.0
+                | PRJ_NOTIFY_PRE_RENAME.0
+                | PRJ_NOTIFY_PRE_SET_HARDLINK.0;
 
-            context.virtualization_context = PrjStartVirtualizing(
-                PCWSTR(root_encoded.as_ptr()),
-                &*callbacks,
-                Some(raw_context as *const c_void),
-                None,
-            )
-            .map_err(Error::StartProjection)?;
+            let mut notification_mapping = PRJ_NOTIFICATION_MAPPING {
+                NotificationBitMask: PRJ_NOTIFY_TYPES(notification_mask),
+                NotificationRoot: PCWSTR(EMPTY_U16_STRING.as_ptr()),
+            };
 
-            context.virtualization_context
+            let options = PRJ_STARTVIRTUALIZING_OPTIONS {
+                NotificationMappings: &mut notification_mapping,
+                NotificationMappingsCount: 1,
+
+                ..Default::default()
+            };
+
+            let result = unsafe {
+                PrjStartVirtualizing(
+                    PCWSTR(root_encoded.as_ptr()),
+                    &*callbacks,
+                    Some(raw_context as *const c_void),
+                    Some(&options),
+                )
+            };
+            match result {
+                Ok(virtualization_context) => virtualization_context,
+                Err(err) => {
+                    unsafe { drop(Box::from_raw(raw_context)) }
+                    return Err(Error::StartProjection(err));
+                }
+            }
         };
 
         log::debug!(
@@ -205,15 +252,14 @@ impl Drop for ProjectedFileSystem {
     fn drop(&mut self) {
         log::trace!("Stopping projection for {:X}", self.instance_id.to_u128());
 
-        /* Shutdown projection */
+        /* Shutdown projection and wait for all callbacks to finish. */
         unsafe { PrjStopVirtualizing(self.virtualization_context) };
 
         /*
-         * Await every currently executing call, before deallocating the raw context.
-         * No new calls for the callbacks should occurr, as the projection has been stopped.
+         * PrjStopVirtualizing waits untill all callbacks have been processed.
+         * Therefore it's safe to assume that no one else will use the raw_context.
          */
-        let context = unsafe { Box::from_raw(self.raw_context) };
-        let _context = context.lock();
+        unsafe { drop(Box::from_raw(self.raw_context)) };
 
         log::debug!("Stopped projection for {:X}", self.instance_id.to_u128());
     }
@@ -226,6 +272,7 @@ mod native {
             OsString,
         },
         mem,
+        ops::ControlFlow,
         os::windows::ffi::OsStringExt,
         path::PathBuf,
     };
@@ -241,11 +288,12 @@ mod native {
                 BOOLEAN,
                 ERROR_FILE_NOT_FOUND,
                 ERROR_INSUFFICIENT_BUFFER,
-                ERROR_IO_INCOMPLETE,
                 ERROR_OUTOFMEMORY,
+                STATUS_CANNOT_DELETE,
                 STATUS_SUCCESS,
             },
             Storage::ProjectedFileSystem::{
+                PrjFileNameMatch,
                 PrjFillDirEntryBuffer2,
                 PrjWriteFileData,
                 PrjWritePlaceholderInfo,
@@ -256,6 +304,20 @@ mod native {
                 PRJ_DIR_ENTRY_BUFFER_HANDLE,
                 PRJ_EXTENDED_INFO,
                 PRJ_FILE_BASIC_INFO,
+                PRJ_NOTIFICATION,
+                PRJ_NOTIFICATION_FILE_HANDLE_CLOSED_FILE_DELETED,
+                PRJ_NOTIFICATION_FILE_HANDLE_CLOSED_FILE_MODIFIED,
+                PRJ_NOTIFICATION_FILE_HANDLE_CLOSED_NO_MODIFICATION,
+                PRJ_NOTIFICATION_FILE_OPENED,
+                PRJ_NOTIFICATION_FILE_OVERWRITTEN,
+                PRJ_NOTIFICATION_FILE_PRE_CONVERT_TO_FULL,
+                PRJ_NOTIFICATION_FILE_RENAMED,
+                PRJ_NOTIFICATION_HARDLINK_CREATED,
+                PRJ_NOTIFICATION_NEW_FILE_CREATED,
+                PRJ_NOTIFICATION_PARAMETERS,
+                PRJ_NOTIFICATION_PRE_DELETE,
+                PRJ_NOTIFICATION_PRE_RENAME,
+                PRJ_NOTIFICATION_PRE_SET_HARDLINK,
                 PRJ_PLACEHOLDER_INFO,
             },
         },
@@ -269,6 +331,10 @@ mod native {
         aligned_buffer::PrjAlignedBuffer,
         utils::io_result_to_hresult,
         DirectoryEntry,
+        FileCloseAction,
+        FileRenameInfo,
+        Notification,
+        ProjectedFile,
     };
 
     impl DirectoryEntry {
@@ -301,170 +367,178 @@ mod native {
         }
 
         fn get_extended_info(&self) -> Option<PRJ_EXTENDED_INFO> {
-            /* TODO: Symlinks */
             None
         }
     }
 
+    type CallbackData = crate::CallbackData<'static, RawProjectionContext>;
     pub unsafe extern "system" fn start_directory_enumeration_callback(
         callback_data: *const PRJ_CALLBACK_DATA,
         enumeration_id: *const GUID,
     ) -> HRESULT {
-        let callback_data = &*callback_data;
         let enumeration_id = &*enumeration_id;
+        let callback_data: CallbackData = callback_data.into();
 
-        let context = &mut *(callback_data.InstanceContext as *mut RawProjectionContext);
-        let path = PathBuf::from(OsString::from_wide(callback_data.FilePathName.as_wide()));
+        callback_data.execute(move |callback_data| {
+            let target = callback_data.file_path.clone().unwrap_or_default();
+            let mut context = callback_data.context.lock();
+            context.register_enumeration(target, enumeration_id.to_u128());
 
-        {
-            let mut context = context.lock();
-            context.register_enumeration(path, enumeration_id.to_u128());
-        }
-
-        STATUS_SUCCESS.to_hresult()
+            Ok(())
+        })
     }
 
     pub unsafe extern "system" fn end_directory_enumeration_callback(
         callback_data: *const PRJ_CALLBACK_DATA,
         enumeration_id: *const GUID,
     ) -> HRESULT {
-        let callback_data = &*callback_data;
-        let enumeration_id = *enumeration_id;
+        let enumeration_id = &*enumeration_id;
+        let callback_data: CallbackData = callback_data.into();
 
-        let context = &mut *(callback_data.InstanceContext as *mut RawProjectionContext);
-        let success = {
-            let mut context = context.lock();
-            context.finish_enumeration(enumeration_id.to_u128())
-        };
+        callback_data.execute(move |callback_data| {
+            let mut context = callback_data.context.lock();
+            if !context.finish_enumeration(enumeration_id.to_u128()) {
+                log::warn!(
+                    "Tried to end an non existing enumeration with id {:X}",
+                    enumeration_id.to_u128()
+                );
+            }
 
-        if success {
-            STATUS_SUCCESS.to_hresult()
-        } else {
-            log::warn!(
-                "Tried to end an non existing enumeration with id {:X}",
-                enumeration_id.to_u128()
-            );
-            STATUS_SUCCESS.to_hresult()
-        }
+            Ok(())
+        })
     }
 
     pub unsafe extern "system" fn get_directory_enumeration_callback(
         callback_data: *const PRJ_CALLBACK_DATA,
         enumeration_id: *const GUID,
-        _searchexpression: PCWSTR,
+        search_expression: PCWSTR,
         dir_entry_buffer_handle: PRJ_DIR_ENTRY_BUFFER_HANDLE,
     ) -> HRESULT {
-        let callback_data = &*callback_data;
         let enumeration_id = &*enumeration_id;
-
-        let context = &mut *(callback_data.InstanceContext as *mut RawProjectionContext);
-        let mut context = context.lock();
-
-        let enumeration = match context
-            .directory_enumerations
-            .get_mut(&enumeration_id.to_u128())
-        {
-            Some(enumeration) => enumeration,
-            None => {
-                /* Assume when the enumeration is unknown, we just finished */
-                log::warn!(
-                    "Tried to get a directory enumeration entry for an invalid enumeration {:X}",
-                    enumeration_id.to_u128()
-                );
-                return STATUS_SUCCESS.to_hresult();
+        let callback_data: CallbackData = callback_data.into();
+        let search_expression = if search_expression.is_null() {
+            None
+        } else {
+            let mut expression = search_expression.as_wide().to_vec();
+            if expression.is_empty() {
+                None
+            } else {
+                /* adding a zero just to ensure it's zero terminated */
+                expression.push(0);
+                Some(expression)
             }
         };
 
-        if callback_data.Flags.0 & PRJ_CB_DATA_FLAG_ENUM_RESTART_SCAN.0 > 0 {
-            enumeration.reset_enumeration();
-        }
+        callback_data.execute(move |callback_data| {
+            let mut context = callback_data.context.lock();
+            let enumeration = context
+                .directory_enumerations
+                .get_mut(&enumeration_id.to_u128())
+                /* Return STATUS_SUCCESS to indicate that the enumeration has ended (as it can not be found). */
+                .ok_or(STATUS_SUCCESS.to_hresult())?;
 
-        let name_cache = enumeration.name_cache.clone();
-        while let Some(entry) = enumeration.peek_entry() {
-            let basic_info = entry.get_basic_info();
-            let extended_info = entry.get_extended_info();
+            if callback_data.flags.0 & PRJ_CB_DATA_FLAG_ENUM_RESTART_SCAN.0 > 0 {
+                enumeration.reset_enumeration();
+            }
+            if let Some(search_expression) = search_expression {
+                /* Update the search expression if given. */
+                enumeration.search_expression = Some(search_expression);
+            }
 
-            /* TODO: Compare name with the search input! */
+            let name_cache = enumeration.name_cache.clone();
+            while let Some(entry) = enumeration.peek_entry() {
+                let basic_info = entry.get_basic_info();
+                let extended_info = entry.get_extended_info();
 
-            let mut name_cache = name_cache.borrow_mut();
-            let name = name_cache.get_or_cache(entry.name().to_string());
+                let mut name_cache = name_cache.borrow_mut();
+                let name = name_cache.get_or_cache(entry.name().to_string());
 
-            let result = unsafe {
-                PrjFillDirEntryBuffer2(
-                    dir_entry_buffer_handle,
-                    PCWSTR(name.as_ptr()),
-                    Some(&basic_info),
-                    extended_info.map(|v| &v as *const _),
-                )
-            };
+                let file_match = if let Some(search_expression) = enumeration.search_expression.as_ref() {
+                    unsafe {
+                        PrjFileNameMatch(PCWSTR(name.as_ptr()), PCWSTR(search_expression.as_ptr())).as_bool()
+                    }
+                } else {
+                    true
+                };
 
-            if let Err(err) = result {
-                if err.code() == ERROR_INSUFFICIENT_BUFFER.to_hresult() {
-                    /* buffer full */
-                    break;
+                if file_match {
+                    let result = unsafe {
+                        PrjFillDirEntryBuffer2(
+                            dir_entry_buffer_handle,
+                            PCWSTR(name.as_ptr()),
+                            Some(&basic_info),
+                            extended_info.map(|v| &v as *const _),
+                        )
+                    };
+
+                    if let Err(err) = result {
+                        if err.code() == ERROR_INSUFFICIENT_BUFFER.to_hresult() {
+                            /* buffer full */
+                            break;
+                        }
+
+                        /* unexpected... */
+                        return Err(err.code());
+                    }
                 }
 
-                /* unexpected... */
-                return err.code();
+                enumeration.consume_entry();
+                if callback_data.flags.0 & PRJ_CB_DATA_FLAG_ENUM_RETURN_SINGLE_ENTRY.0 > 0 {
+                    break;
+                }
             }
 
-            enumeration.consume_entry();
-
-            if callback_data.Flags.0 & PRJ_CB_DATA_FLAG_ENUM_RETURN_SINGLE_ENTRY.0 > 0 {
-                break;
-            }
-        }
-
-        STATUS_SUCCESS.to_hresult()
+            Ok(())
+        })
     }
 
     pub unsafe extern "system" fn get_placeholder_information_callback(
         callback_data: *const PRJ_CALLBACK_DATA,
     ) -> HRESULT {
-        let callback_data = &*callback_data;
+        let callback_data: CallbackData = callback_data.into();
 
-        let context = &mut *(callback_data.InstanceContext as *mut RawProjectionContext);
-        let path = PathBuf::from(OsString::from_wide(callback_data.FilePathName.as_wide()));
+        callback_data.execute(move |callback_data| {
+            let path = callback_data.file_path.clone().unwrap_or_default();
 
-        let context = context.lock();
-        let entry = match context.source.get_directory_entry(&path) {
-            Some(entry) => entry,
-            None => return ERROR_FILE_NOT_FOUND.to_hresult(),
-        };
+            let context = callback_data.context.lock();
+            let entry = context
+                .source
+                .get_directory_entry(&path)
+                .ok_or(ERROR_FILE_NOT_FOUND.to_hresult())?;
 
-        let mut name_cache = FileNameU16Cache::default();
-        let name = name_cache.get_or_cache(path.display().to_string());
+            let mut name_cache = FileNameU16Cache::default();
+            let name = name_cache.get_or_cache(path.display().to_string());
 
-        let placeholder_info = PRJ_PLACEHOLDER_INFO {
-            FileBasicInfo: entry.get_basic_info(),
-            ..PRJ_PLACEHOLDER_INFO::default()
-        };
+            let placeholder_info = PRJ_PLACEHOLDER_INFO {
+                FileBasicInfo: entry.get_basic_info(),
+                ..PRJ_PLACEHOLDER_INFO::default()
+            };
 
-        let result = if let Some(extended_info) = entry.get_extended_info() {
-            unsafe {
-                PrjWritePlaceholderInfo2(
-                    context.virtualization_context,
-                    PCWSTR(name.as_ptr()),
-                    &placeholder_info,
-                    mem::size_of_val(&placeholder_info) as u32,
-                    Some(&extended_info),
-                )
-            }
-        } else {
-            unsafe {
-                PrjWritePlaceholderInfo(
-                    context.virtualization_context,
-                    PCWSTR(name.as_ptr()),
-                    &placeholder_info,
-                    mem::size_of_val(&placeholder_info) as u32,
-                )
-            }
-        };
+            if let Some(extended_info) = entry.get_extended_info() {
+                unsafe {
+                    PrjWritePlaceholderInfo2(
+                        callback_data.namespace_virtualization_context,
+                        PCWSTR(name.as_ptr()),
+                        &placeholder_info,
+                        mem::size_of_val(&placeholder_info) as u32,
+                        Some(&extended_info),
+                    )
+                    .map_err(|err| err.code())?;
+                }
+            } else {
+                unsafe {
+                    PrjWritePlaceholderInfo(
+                        callback_data.namespace_virtualization_context,
+                        PCWSTR(name.as_ptr()),
+                        &placeholder_info,
+                        mem::size_of_val(&placeholder_info) as u32,
+                    )
+                    .map_err(|err| err.code())?;
+                }
+            };
 
-        match result {
-            Ok(_) => STATUS_SUCCESS.to_hresult(),
-            Err(err) => err.code(),
-        }
+            Ok(())
+        })
     }
 
     pub unsafe extern "system" fn get_file_data_callback(
@@ -473,69 +547,139 @@ mod native {
         length: u32,
     ) -> HRESULT {
         let length = length as usize;
-        let callback_data = &*callback_data;
+        let callback_data: CallbackData = callback_data.into();
 
-        let context = &mut *(callback_data.InstanceContext as *mut RawProjectionContext);
-        let path = PathBuf::from(OsString::from_wide(callback_data.FilePathName.as_wide()));
+        callback_data.execute(move |callback_data| {
+            let path = callback_data.file_path.clone().unwrap_or_default();
 
-        let context = context.lock();
-        let mut source = match {
-            context
+            let context = callback_data.context.lock();
+            let mut source = context
                 .source
                 .stream_file_content(&path, byte_offset as usize, length)
-        } {
-            Ok(source) => source,
-            Err(err) => {
-                return HRESULT::from_win32(
-                    err.raw_os_error().unwrap_or(ERROR_IO_INCOMPLETE.0 as i32) as u32,
-                )
-            }
-        };
+                .map_err(io_result_to_hresult)?;
 
-        let chunk_length = if length <= 1024 * 1024 {
-            length
+            let chunk_length = if length <= 1024 * 1024 {
+                length
+            } else {
+                1024 * 1024
+            };
+
+            let mut buffer = PrjAlignedBuffer::allocate(
+                callback_data.namespace_virtualization_context,
+                chunk_length,
+            )
+            .ok_or(ERROR_OUTOFMEMORY.to_hresult())?;
+            let buffer = buffer.buffer();
+
+            let mut bytes_written = 0;
+            while bytes_written < length {
+                let bytes_pending = length - bytes_written;
+                let chunk_length = bytes_pending.min(buffer.len());
+
+                source
+                    .read_exact(&mut buffer[0..chunk_length])
+                    .map_err(io_result_to_hresult)?;
+
+                let write_result = unsafe {
+                    PrjWriteFileData(
+                        callback_data.namespace_virtualization_context,
+                        &callback_data.data_stream_id,
+                        buffer.as_ptr() as *const c_void,
+                        byte_offset + bytes_written as u64,
+                        chunk_length as u32,
+                    )
+                };
+                if let Err(err) = write_result {
+                    log::warn!(
+                        "Failed to write projected file data for {}: {}",
+                        path.display(),
+                        err
+                    );
+                    return Err(err.code());
+                }
+
+                bytes_written += chunk_length;
+            }
+
+            Ok(())
+        })
+    }
+
+    pub unsafe extern "system" fn notification_callback(
+        callback_data: *const PRJ_CALLBACK_DATA,
+        is_directory: BOOLEAN,
+        notification: PRJ_NOTIFICATION,
+        destination_filename: PCWSTR,
+        _operation_parameters: *mut PRJ_NOTIFICATION_PARAMETERS,
+    ) -> HRESULT {
+        let callback_data: CallbackData = callback_data.into();
+
+        let destination_filename = if destination_filename.is_null() {
+            None
         } else {
-            1024 * 1024
+            Some(PathBuf::from(OsString::from_wide(
+                destination_filename.as_wide(),
+            )))
         };
 
-        let mut buffer =
-            match PrjAlignedBuffer::allocate(context.virtualization_context, chunk_length) {
-                Some(buffer) => buffer,
-                None => return ERROR_OUTOFMEMORY.to_hresult(),
+        callback_data.execute(move |callback_data| {
+            let target_file = ProjectedFile {
+                file_id: callback_data.file_id.to_u128(),
+                is_directory: is_directory.as_bool(),
+                path: callback_data.file_path.clone().unwrap_or_default(),
             };
-        let buffer = buffer.buffer();
 
-        let mut bytes_written = 0;
-        while bytes_written < length {
-            let bytes_pending = length - bytes_written;
-            let chunk_length = bytes_pending.min(buffer.len());
+            let notification = match notification {
+                PRJ_NOTIFICATION_NEW_FILE_CREATED => Notification::FileCreated(target_file),
+                PRJ_NOTIFICATION_FILE_OPENED => Notification::FileOpened(target_file),
+                PRJ_NOTIFICATION_FILE_HANDLE_CLOSED_FILE_DELETED => {
+                    Notification::FileClosed(target_file, FileCloseAction::Deleted)
+                }
+                PRJ_NOTIFICATION_FILE_HANDLE_CLOSED_FILE_MODIFIED => {
+                    Notification::FileClosed(target_file, FileCloseAction::Modified)
+                }
+                PRJ_NOTIFICATION_FILE_HANDLE_CLOSED_NO_MODIFICATION => {
+                    Notification::FileClosed(target_file, FileCloseAction::NoModification)
+                }
+                PRJ_NOTIFICATION_FILE_OVERWRITTEN => Notification::FileOverwritten(target_file),
 
-            if let Err(err) = source.read_exact(&mut buffer[0..chunk_length]) {
-                log::debug!("IO error for reading {} bytes: {}", chunk_length, err);
-                return io_result_to_hresult(err);
-            }
+                PRJ_NOTIFICATION_PRE_RENAME => Notification::PreFileRename(FileRenameInfo {
+                    source: callback_data.file_path.clone(),
+                    destination: destination_filename,
+                }),
+                PRJ_NOTIFICATION_FILE_RENAMED => Notification::FileRenamed(FileRenameInfo {
+                    source: callback_data.file_path.clone(),
+                    destination: destination_filename,
+                }),
 
-            let write_result = unsafe {
-                PrjWriteFileData(
-                    context.virtualization_context,
-                    &callback_data.DataStreamId,
-                    buffer.as_ptr() as *const c_void,
-                    byte_offset + bytes_written as u64,
-                    chunk_length as u32,
-                )
+                PRJ_NOTIFICATION_PRE_SET_HARDLINK => Notification::PreSetHardlink(target_file),
+                PRJ_NOTIFICATION_HARDLINK_CREATED => Notification::HardlinkCreated(target_file),
+
+                PRJ_NOTIFICATION_FILE_PRE_CONVERT_TO_FULL => {
+                    Notification::FilePreConvertToFull(target_file)
+                }
+                PRJ_NOTIFICATION_PRE_DELETE => Notification::PreFileDelete(target_file),
+
+                notification => {
+                    log::warn!("Invalid notification {}", notification.0);
+                    return Ok(());
+                }
             };
-            if let Err(err) = write_result {
+
+            let context = callback_data.context.lock();
+            let action = context.source.handle_notification(&notification);
+            if matches!(action, ControlFlow::Break(_)) {
+                if notification.is_cancelable() {
+                    return Err(STATUS_CANNOT_DELETE.to_hresult());
+                }
+
                 log::warn!(
-                    "Failed to write projected file data for {}: {}",
-                    path.display(),
-                    err
+                    "Tried to cancel a non cancelable action: {:?}",
+                    notification
                 );
-                return err.code();
             }
 
-            bytes_written += chunk_length;
-        }
-
-        STATUS_SUCCESS.to_hresult()
+            Ok(())
+        })
     }
 }

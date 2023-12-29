@@ -43,9 +43,10 @@ jobs:
       - name: Build
         run: cargo build --all-targets
       - name: Test
-        run: cargo test
+        run: cargo test -- --nocapture
         env:
           RUST_LOG: trace
+          RUST_TEST_THREADS: 1
   deploy:
     runs-on: windows-latest
     needs: tests

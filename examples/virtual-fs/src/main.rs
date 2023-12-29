@@ -5,6 +5,7 @@ use std::{
         Cursor,
         Read,
     },
+    ops::ControlFlow,
     path::PathBuf,
 };
 
@@ -13,6 +14,7 @@ use windows_projfs::{
     DirectoryEntry,
     DirectoryInfo,
     FileInfo,
+    Notification,
     ProjectedFileSystem,
     ProjectedFileSystemSource,
 };
@@ -46,6 +48,18 @@ impl ProjectedFileSystemSource for VirtualProjectedSource {
         let buffer = "Hello World\n".to_owned().into_bytes();
 
         Ok(Box::new(Cursor::new(buffer)))
+    }
+
+    fn handle_notification(&self, notification: &Notification) -> ControlFlow<()> {
+        log::debug!("Notification: {:?}", notification);
+        if notification.is_cancelable()
+            && !matches!(notification, Notification::FilePreConvertToFull(_))
+        {
+            /* Try to cancel all possible actions to make the file system read only. */
+            ControlFlow::Break(())
+        } else {
+            ControlFlow::Continue(())
+        }
     }
 }
 
