@@ -578,9 +578,6 @@ mod native {
 
                 source
                     .read_exact(&mut buffer[0..chunk_length])
-                    .inspect_err(|err| {
-                        log::debug!("IO error for reading {} bytes: {}", chunk_length, err)
-                    })
                     .map_err(io_result_to_hresult)?;
 
                 let write_result = unsafe {
