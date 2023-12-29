@@ -1,4 +1,7 @@
 # windows-projfs
+[![GitHub build status](https://github.com/WolverinDEV/windows-projfs/actions/workflows/rust.yml/badge.svg?branch=master)](https://github.com/WolverinDEV/windows-projfs/actions?query=workflow%3ARust)
+[![crates.io](https://img.shields.io/crates/v/windows-projfs.svg)](https://crates.io/crates/windows-projfs)
+
 A simple rust library for easily creating projected file systems on Windows.  
 Examples can be found in [examples](examples).  
 
