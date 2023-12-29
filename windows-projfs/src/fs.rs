@@ -121,11 +121,9 @@ impl DirectoryIteration {
     }
 }
 
-pub(crate) type RawProjectionContext = Mutex<ProjectionContext>;
-pub(crate) struct ProjectionContext {
+pub type RawProjectionContext = Mutex<ProjectionContext>;
+pub struct ProjectionContext {
     source: Box<dyn ProjectedFileSystemSource>,
-    virtualization_context: PRJ_NAMESPACE_VIRTUALIZATION_CONTEXT,
-
     directory_enumerations: BTreeMap<u128, DirectoryIteration>,
 }
 
@@ -148,12 +146,11 @@ impl ProjectionContext {
 
 pub struct ProjectedFileSystem {
     instance_id: GUID,
-    raw_context: *mut Mutex<ProjectionContext>,
+    raw_context: *mut RawProjectionContext,
     virtualization_context: PRJ_NAMESPACE_VIRTUALIZATION_CONTEXT,
 }
 
 static EMPTY_U16_STRING: &'static [u16] = &[0];
-
 impl ProjectedFileSystem {
     pub fn new(root: &Path, source: impl ProjectedFileSystemSource + 'static) -> Result<Self> {
         let instance_id = GUID::new()?;
@@ -174,7 +171,6 @@ impl ProjectedFileSystem {
 
         let context = Box::new(Mutex::new(ProjectionContext {
             source: Box::new(source),
-            virtualization_context: PRJ_NAMESPACE_VIRTUALIZATION_CONTEXT::default(),
             directory_enumerations: Default::default(),
         }));
 
@@ -191,10 +187,7 @@ impl ProjectedFileSystem {
         });
 
         let raw_context = Box::into_raw(context);
-        let virtualization_context = unsafe {
-            let context = &mut *raw_context;
-            let mut context = context.lock();
-
+        let virtualization_context = {
             let notification_mask = 0
                 | PRJ_NOTIFY_FILE_HANDLE_CLOSED_FILE_DELETED.0
                 | PRJ_NOTIFY_FILE_HANDLE_CLOSED_FILE_MODIFIED.0
@@ -218,15 +211,21 @@ impl ProjectedFileSystem {
             options.NotificationMappings = &mut notification_mapping;
             options.NotificationMappingsCount = 1;
 
-            context.virtualization_context = PrjStartVirtualizing(
-                PCWSTR(root_encoded.as_ptr()),
-                &*callbacks,
-                Some(raw_context as *const c_void),
-                Some(&options),
-            )
-            .map_err(Error::StartProjection)?;
-
-            context.virtualization_context
+            let result = unsafe {
+                PrjStartVirtualizing(
+                    PCWSTR(root_encoded.as_ptr()),
+                    &*callbacks,
+                    Some(raw_context as *const c_void),
+                    Some(&options),
+                )
+            };
+            match result {
+                Ok(virtualization_context) => virtualization_context,
+                Err(err) => {
+                    unsafe { drop(Box::from_raw(raw_context)) }
+                    return Err(Error::StartProjection(err));
+                }
+            }
         };
 
         log::debug!(
@@ -246,15 +245,14 @@ impl Drop for ProjectedFileSystem {
     fn drop(&mut self) {
         log::trace!("Stopping projection for {:X}", self.instance_id.to_u128());
 
-        /* Shutdown projection */
+        /* Shutdown projection and wait for all callbacks to finish. */
         unsafe { PrjStopVirtualizing(self.virtualization_context) };
 
         /*
-         * Await every currently executing call, before deallocating the raw context.
-         * No new calls for the callbacks should occurr, as the projection has been stopped.
+         * PrjStopVirtualizing waits untill all callbacks have been processed.
+         * Therefore it's safe to assume that no one else will use the raw_context.
          */
-        let context = unsafe { Box::from_raw(self.raw_context) };
-        let _context = context.lock();
+        unsafe { drop(Box::from_raw(self.raw_context)) };
 
         log::debug!("Stopped projection for {:X}", self.instance_id.to_u128());
     }
@@ -489,7 +487,7 @@ mod native {
             if let Some(extended_info) = entry.get_extended_info() {
                 unsafe {
                     PrjWritePlaceholderInfo2(
-                        context.virtualization_context,
+                        callback_data.namespace_virtualization_context,
                         PCWSTR(name.as_ptr()),
                         &placeholder_info,
                         mem::size_of_val(&placeholder_info) as u32,
@@ -500,7 +498,7 @@ mod native {
             } else {
                 unsafe {
                     PrjWritePlaceholderInfo(
-                        context.virtualization_context,
+                        callback_data.namespace_virtualization_context,
                         PCWSTR(name.as_ptr()),
                         &placeholder_info,
                         mem::size_of_val(&placeholder_info) as u32,
@@ -536,9 +534,11 @@ mod native {
                 1024 * 1024
             };
 
-            let mut buffer =
-                PrjAlignedBuffer::allocate(context.virtualization_context, chunk_length)
-                    .ok_or(ERROR_OUTOFMEMORY.to_hresult())?;
+            let mut buffer = PrjAlignedBuffer::allocate(
+                callback_data.namespace_virtualization_context,
+                chunk_length,
+            )
+            .ok_or(ERROR_OUTOFMEMORY.to_hresult())?;
             let buffer = buffer.buffer();
 
             let mut bytes_written = 0;
@@ -555,7 +555,7 @@ mod native {
 
                 let write_result = unsafe {
                     PrjWriteFileData(
-                        context.virtualization_context,
+                        callback_data.namespace_virtualization_context,
                         &callback_data.data_stream_id,
                         buffer.as_ptr() as *const c_void,
                         byte_offset + bytes_written as u64,
