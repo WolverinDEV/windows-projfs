@@ -47,7 +47,9 @@ impl ProjectedFileSystemSource for TestProjectionSource {
                     .into()
                 } else {
                     DirectoryInfo {
-                        name: components.pop_front().unwrap(),
+                        directory_name: components.pop_front().unwrap(),
+
+                        ..Default::default()
                     }
                     .into()
                 }

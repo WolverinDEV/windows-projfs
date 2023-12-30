@@ -1,6 +1,6 @@
 [package]
 name = "windows-projfs"
-version = "0.1.3"
+version = "0.1.4"
 edition = "2021"
 authors = ["M. Hadenfeldt <git@did.science>"]
 description = "A rust library for the Windows projected file system API"
