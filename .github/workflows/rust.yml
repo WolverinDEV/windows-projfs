@@ -27,10 +27,13 @@ jobs:
       - name: rustfmt
         run: cargo fmt --all -- --check
       - name: clippy
-        run: cargo clippy --all-targets
+        run: cargo clippy --all-targets --all-features
   tests:
     runs-on: windows-latest
     needs: fmt
+    strategy:
+      matrix:
+        features: ["", "-F dynamic-import"]
     steps:
       - uses: actions/checkout@v3
       - uses: dtolnay/rust-toolchain@stable
@@ -41,11 +44,13 @@ jobs:
           cargo --version
           rustc --version
       - name: Build
-        run: cargo build --all-targets
+        run: cargo build ${{ matrix.features }} --all-targets
       - name: Test
-        run: cargo test -- --nocapture
+        run: cargo test ${{ matrix.features }} -- --nocapture
         env:
           RUST_LOG: trace
+          # Running multiple instances in parallel might cause
+          # a crash for low end environments.
           RUST_TEST_THREADS: 1
   deploy:
     runs-on: windows-latest

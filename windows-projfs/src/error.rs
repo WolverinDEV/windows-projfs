@@ -15,4 +15,11 @@ pub enum Error {
 
     #[error("failed to start projection: {0}")]
     StartProjection(windows::core::Error),
+
+    #[error("The Windows feature \"Projected File System\" is not enabled")]
+    WindowsFeatureNotEnabled,
+
+    #[cfg(feature = "dynamic-import")]
+    #[error("failed to resolve imports: {0}")]
+    LibraryError(#[from] libloading::Error),
 }
