@@ -223,6 +223,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "302d7ab3130588088d277783b1e2d2e10c9e9e4a16dd9050e6ec93fb3e7048f4"
 
 [[package]]
+name = "libloading"
+version = "0.8.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c571b676ddfc9a8c12f1f3d3085a7b163966a8fd8098a90640953ce5f6170161"
+dependencies = [
+ "cfg-if",
+ "windows-sys 0.48.0",
+]
+
+[[package]]
 name = "linux-raw-sys"
 version = "0.4.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -520,10 +530,11 @@ dependencies = [
 
 [[package]]
 name = "windows-projfs"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "anyhow",
  "env_logger",
+ "libloading",
  "log",
  "parking_lot",
  "tempdir",

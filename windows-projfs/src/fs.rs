@@ -11,6 +11,7 @@ use std::{
         PathBuf,
     },
     rc::Rc,
+    sync::Arc,
 };
 
 use parking_lot::Mutex;
@@ -20,9 +21,6 @@ use windows::{
         PCWSTR,
     },
     Win32::Storage::ProjectedFileSystem::{
-        PrjFileNameCompare,
-        PrjStartVirtualizing,
-        PrjStopVirtualizing,
         PRJ_CALLBACKS,
         PRJ_NAMESPACE_VIRTUALIZATION_CONTEXT,
         PRJ_NOTIFICATION_MAPPING,
@@ -44,6 +42,10 @@ use windows::{
 };
 
 use crate::{
+    library::{
+        load_library,
+        ProjectedFSLibrary,
+    },
     DirectoryEntry,
     Error,
     ProjectedFileSystemSource,
@@ -80,7 +82,11 @@ struct DirectoryIteration {
 }
 
 impl DirectoryIteration {
-    pub fn from_unsorted(id: u128, mut entries: Vec<DirectoryEntry>) -> Self {
+    pub fn from_unsorted(
+        library: &dyn ProjectedFSLibrary,
+        id: u128,
+        mut entries: Vec<DirectoryEntry>,
+    ) -> Self {
         let name_cache: Rc<RefCell<FileNameU16Cache>> = Default::default();
         entries.sort_unstable_by({
             let name_cache = name_cache.clone();
@@ -89,7 +95,8 @@ impl DirectoryIteration {
                 let name_a = name_cache.get_or_cache(a.name().to_string()).as_ptr();
                 let name_b = name_cache.get_or_cache(b.name().to_string()).as_ptr();
 
-                let result = unsafe { PrjFileNameCompare(PCWSTR(name_a), PCWSTR(name_b)) };
+                let result =
+                    unsafe { library.prj_file_name_compare(PCWSTR(name_a), PCWSTR(name_b)) };
                 result.cmp(&0)
             }
         });
@@ -126,6 +133,7 @@ impl DirectoryIteration {
 
 pub type RawProjectionContext = Mutex<ProjectionContext>;
 pub struct ProjectionContext {
+    library: Arc<dyn ProjectedFSLibrary>,
     source: Box<dyn ProjectedFileSystemSource>,
     directory_enumerations: BTreeMap<u128, DirectoryIteration>,
 }
@@ -134,7 +142,11 @@ impl ProjectionContext {
     pub fn register_enumeration(&mut self, target: PathBuf, id: u128) {
         let old_enumeration = self.directory_enumerations.insert(
             id,
-            DirectoryIteration::from_unsorted(id, self.source.list_directory(&target)),
+            DirectoryIteration::from_unsorted(
+                &*self.library,
+                id,
+                self.source.list_directory(&target),
+            ),
         );
 
         if let Some(enumeration) = old_enumeration {
@@ -148,7 +160,9 @@ impl ProjectionContext {
 }
 
 pub struct ProjectedFileSystem {
+    library: Arc<dyn ProjectedFSLibrary>,
     instance_id: GUID,
+
     raw_context: *mut RawProjectionContext,
     virtualization_context: PRJ_NAMESPACE_VIRTUALIZATION_CONTEXT,
 }
@@ -160,10 +174,9 @@ impl ProjectedFileSystem {
         let mut root_encoded = root.to_string_lossy().encode_utf16().collect::<Vec<_>>();
         root_encoded.push(0);
 
+        let library = load_library()?;
         unsafe {
-            use windows::Win32::Storage::ProjectedFileSystem::PrjMarkDirectoryAsPlaceholder;
-
-            PrjMarkDirectoryAsPlaceholder(
+            library.prj_mark_directory_as_placeholder(
                 PCWSTR(root_encoded.as_ptr()),
                 PCWSTR::null(),
                 None,
@@ -173,6 +186,7 @@ impl ProjectedFileSystem {
         .map_err(Error::MarkProjectionRoot)?;
 
         let context = Box::new(Mutex::new(ProjectionContext {
+            library: library.clone(),
             source: Box::new(source),
             directory_enumerations: Default::default(),
         }));
@@ -219,7 +233,7 @@ impl ProjectedFileSystem {
             };
 
             let result = unsafe {
-                PrjStartVirtualizing(
+                library.prj_start_virtualizing(
                     PCWSTR(root_encoded.as_ptr()),
                     &*callbacks,
                     Some(raw_context as *const c_void),
@@ -241,7 +255,9 @@ impl ProjectedFileSystem {
             root.to_string_lossy()
         );
         Ok(Self {
+            library,
             instance_id,
+
             raw_context,
             virtualization_context,
         })
@@ -253,7 +269,10 @@ impl Drop for ProjectedFileSystem {
         log::trace!("Stopping projection for {:X}", self.instance_id.to_u128());
 
         /* Shutdown projection and wait for all callbacks to finish. */
-        unsafe { PrjStopVirtualizing(self.virtualization_context) };
+        unsafe {
+            self.library
+                .prj_stop_virtualizing(self.virtualization_context)
+        };
 
         /*
          * PrjStopVirtualizing waits untill all callbacks have been processed.
@@ -293,11 +312,6 @@ mod native {
                 STATUS_SUCCESS,
             },
             Storage::ProjectedFileSystem::{
-                PrjFileNameMatch,
-                PrjFillDirEntryBuffer2,
-                PrjWriteFileData,
-                PrjWritePlaceholderInfo,
-                PrjWritePlaceholderInfo2,
                 PRJ_CALLBACK_DATA,
                 PRJ_CB_DATA_FLAG_ENUM_RESTART_SCAN,
                 PRJ_CB_DATA_FLAG_ENUM_RETURN_SINGLE_ENTRY,
@@ -439,6 +453,8 @@ mod native {
 
         callback_data.execute(move |callback_data| {
             let mut context = callback_data.context.lock();
+            let library = context.library.clone();
+
             let enumeration = context
                 .directory_enumerations
                 .get_mut(&enumeration_id.to_u128())
@@ -463,7 +479,7 @@ mod native {
 
                 let file_match = if let Some(search_expression) = enumeration.search_expression.as_ref() {
                     unsafe {
-                        PrjFileNameMatch(PCWSTR(name.as_ptr()), PCWSTR(search_expression.as_ptr())).as_bool()
+                        library.prj_file_name_match(PCWSTR(name.as_ptr()), PCWSTR(search_expression.as_ptr())).as_bool()
                     }
                 } else {
                     true
@@ -471,7 +487,7 @@ mod native {
 
                 if file_match {
                     let result = unsafe {
-                        PrjFillDirEntryBuffer2(
+                        library.prj_fill_dir_entry_buffer2(
                             dir_entry_buffer_handle,
                             PCWSTR(name.as_ptr()),
                             Some(&basic_info),
@@ -524,24 +540,28 @@ mod native {
 
             if let Some(extended_info) = entry.get_extended_info() {
                 unsafe {
-                    PrjWritePlaceholderInfo2(
-                        callback_data.namespace_virtualization_context,
-                        PCWSTR(name.as_ptr()),
-                        &placeholder_info,
-                        mem::size_of_val(&placeholder_info) as u32,
-                        Some(&extended_info),
-                    )
-                    .map_err(|err| err.code())?;
+                    context
+                        .library
+                        .prj_write_placeholder_info2(
+                            callback_data.namespace_virtualization_context,
+                            PCWSTR(name.as_ptr()),
+                            &placeholder_info,
+                            mem::size_of_val(&placeholder_info) as u32,
+                            Some(&extended_info),
+                        )
+                        .map_err(|err| err.code())?;
                 }
             } else {
                 unsafe {
-                    PrjWritePlaceholderInfo(
-                        callback_data.namespace_virtualization_context,
-                        PCWSTR(name.as_ptr()),
-                        &placeholder_info,
-                        mem::size_of_val(&placeholder_info) as u32,
-                    )
-                    .map_err(|err| err.code())?;
+                    context
+                        .library
+                        .prj_write_placeholder_info(
+                            callback_data.namespace_virtualization_context,
+                            PCWSTR(name.as_ptr()),
+                            &placeholder_info,
+                            mem::size_of_val(&placeholder_info) as u32,
+                        )
+                        .map_err(|err| err.code())?;
                 }
             };
 
@@ -589,7 +609,7 @@ mod native {
                     .map_err(io_result_to_hresult)?;
 
                 let write_result = unsafe {
-                    PrjWriteFileData(
+                    context.library.prj_write_file_data(
                         callback_data.namespace_virtualization_context,
                         &callback_data.data_stream_id,
                         buffer.as_ptr() as *const c_void,

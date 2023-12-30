@@ -11,7 +11,8 @@ mod fs;
 pub use fs::*;
 
 mod callback_data;
-pub(crate) use callback_data::*;
+use callback_data::*;
 
-pub(crate) mod aligned_buffer;
-pub(crate) mod utils;
+mod aligned_buffer;
+mod library;
+mod utils;
