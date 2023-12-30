@@ -22,7 +22,7 @@ pub enum DirectoryEntry {
 impl DirectoryEntry {
     pub fn name(&self) -> &str {
         match self {
-            Self::Directory(dir) => &dir.name,
+            Self::Directory(dir) => &dir.directory_name,
             Self::File(file) => &file.file_name,
         }
     }
@@ -44,14 +44,22 @@ impl TryFrom<DirEntry> for DirectoryEntry {
     type Error = std::io::Error;
 
     fn try_from(value: DirEntry) -> Result<Self, Self::Error> {
+        use std::os::windows::fs::MetadataExt;
+
         let file_name = value.file_name().to_string_lossy().to_string();
         let file_type = value.file_type()?;
+        let metadata = value.metadata()?;
         if file_type.is_dir() {
-            Ok(DirectoryInfo { name: file_name }.into())
-        } else if file_type.is_file() {
-            use std::os::windows::fs::MetadataExt;
+            Ok(DirectoryInfo {
+                directory_name: file_name,
+                directory_attributes: metadata.file_attributes(),
 
-            let metadata = value.metadata()?;
+                creation_time: metadata.creation_time(),
+                last_access_time: metadata.last_access_time(),
+                last_write_time: metadata.last_write_time(),
+            }
+            .into())
+        } else if file_type.is_file() {
             Ok(FileInfo {
                 file_name,
                 file_size: metadata.len(),
@@ -81,7 +89,12 @@ pub struct FileInfo {
 
 #[derive(Default, Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct DirectoryInfo {
-    pub name: String,
+    pub directory_name: String,
+    pub directory_attributes: u32,
+
+    pub creation_time: u64,
+    pub last_access_time: u64,
+    pub last_write_time: u64,
 }
 
 pub trait ProjectedFileSystemSource {

@@ -45,11 +45,21 @@ fn directory_metadata() -> anyhow::Result<()> {
         PathBuf::from(""),
         vec![
             DirectoryInfo {
-                name: "Test-A".to_string(),
+                directory_name: "Test-A".to_string(),
+                directory_attributes: 4456464,
+
+                creation_time: 133482410013464001,
+                last_access_time: 133482410013464002,
+                last_write_time: 133482410013464003,
             }
             .into(),
             DirectoryInfo {
-                name: "Test-B".to_string(),
+                directory_name: "Test-B".to_string(),
+                directory_attributes: 4456464,
+
+                creation_time: 133482410013464001,
+                last_access_time: 133482410013464002,
+                last_write_time: 133482410013464003,
             }
             .into(),
             FileInfo {
@@ -80,7 +90,12 @@ fn directory_metadata() -> anyhow::Result<()> {
     pfs_source.entries.insert(
         PathBuf::from("Test-B"),
         vec![DirectoryInfo {
-            name: "Test-C".to_string(),
+            directory_name: "Test-C".to_string(),
+            directory_attributes: 4456464,
+
+            creation_time: 133482410013464001,
+            last_access_time: 133482410013464002,
+            last_write_time: 133482410013464003,
         }
         .into()],
     );

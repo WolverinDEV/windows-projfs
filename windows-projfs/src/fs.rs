@@ -342,8 +342,16 @@ mod native {
             let mut basic_info = PRJ_FILE_BASIC_INFO::default();
 
             match self {
-                Self::Directory(_) => {
+                Self::Directory(directory) => {
                     basic_info.IsDirectory = BOOLEAN::from(true);
+                    basic_info.FileAttributes = directory.directory_attributes;
+
+                    basic_info.CreationTime = directory.creation_time as i64;
+                    basic_info.LastAccessTime = directory.last_access_time as i64;
+                    basic_info.LastWriteTime = directory.last_write_time as i64;
+
+                    /* same reasoning as for the file entry */
+                    basic_info.ChangeTime = directory.last_write_time as i64;
                 }
                 Self::File(file) => {
                     basic_info.IsDirectory = BOOLEAN::from(false);

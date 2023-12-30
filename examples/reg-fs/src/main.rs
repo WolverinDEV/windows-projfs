@@ -32,10 +32,13 @@ impl ProjectedFileSystemSource for RegistryProjectedSource {
             Err(_) => return vec![],
         };
 
-        let directories = key
-            .enum_keys()
-            .filter_map(|key| key.ok())
-            .map(|name| DirectoryEntry::Directory(DirectoryInfo { name }));
+        let directories = key.enum_keys().filter_map(|key| key.ok()).map(|name| {
+            DirectoryEntry::Directory(DirectoryInfo {
+                directory_name: name,
+
+                ..Default::default()
+            })
+        });
 
         let files = key
             .enum_values()

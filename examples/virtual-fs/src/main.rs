@@ -25,7 +25,9 @@ impl ProjectedFileSystemSource for VirtualProjectedSource {
         if path.display().to_string().is_empty() {
             vec![
                 DirectoryEntry::Directory(DirectoryInfo {
-                    name: "test-dir".to_string(),
+                    directory_name: "test-dir".to_string(),
+
+                    ..Default::default()
                 }),
                 DirectoryEntry::File(FileInfo {
                     file_name: "test.txt".to_string(),
