@@ -593,6 +593,7 @@ mod native {
             };
 
             let mut buffer = PrjAlignedBuffer::allocate(
+                context.library.clone(),
                 callback_data.namespace_virtualization_context,
                 chunk_length,
             )

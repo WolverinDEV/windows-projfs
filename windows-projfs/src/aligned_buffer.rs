@@ -1,23 +1,34 @@
-use std::ffi::c_void;
-
-use windows::Win32::Storage::ProjectedFileSystem::{
-    PrjAllocateAlignedBuffer,
-    PrjFreeAlignedBuffer,
-    PRJ_NAMESPACE_VIRTUALIZATION_CONTEXT,
+use std::{
+    ffi::c_void,
+    sync::Arc,
 };
 
+use windows::Win32::Storage::ProjectedFileSystem::PRJ_NAMESPACE_VIRTUALIZATION_CONTEXT;
+
+use crate::library::ProjectedFSLibrary;
+
 pub struct PrjAlignedBuffer {
+    library: Arc<dyn ProjectedFSLibrary>,
+
     length: usize,
     raw_buffer: *mut c_void,
 }
 
 impl PrjAlignedBuffer {
-    pub fn allocate(context: PRJ_NAMESPACE_VIRTUALIZATION_CONTEXT, length: usize) -> Option<Self> {
-        let raw_buffer = unsafe { PrjAllocateAlignedBuffer(context, length) };
+    pub fn allocate(
+        library: Arc<dyn ProjectedFSLibrary>,
+        context: PRJ_NAMESPACE_VIRTUALIZATION_CONTEXT,
+        length: usize,
+    ) -> Option<Self> {
+        let raw_buffer = unsafe { library.prj_allocate_aligned_buffer(context, length) };
         if raw_buffer.is_null() {
             None
         } else {
-            Some(Self { length, raw_buffer })
+            Some(Self {
+                library,
+                length,
+                raw_buffer,
+            })
         }
     }
 
@@ -28,6 +39,6 @@ impl PrjAlignedBuffer {
 
 impl Drop for PrjAlignedBuffer {
     fn drop(&mut self) {
-        unsafe { PrjFreeAlignedBuffer(self.raw_buffer) };
+        unsafe { self.library.prj_free_aligned_buffer(self.raw_buffer) };
     }
 }
