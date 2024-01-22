@@ -13,9 +13,14 @@ use std::{
     },
 };
 
+/// A `DirectoryEntry` represents all possible entry types
+/// which can be contained within the file system.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub enum DirectoryEntry {
+    /// The entry is a directory
     Directory(DirectoryInfo),
+
+    /// The entry is a single file
     File(FileInfo),
 }
 
@@ -76,6 +81,11 @@ impl TryFrom<DirEntry> for DirectoryEntry {
     }
 }
 
+/// Supported attributes for files.
+///
+/// Note:
+/// The file size should be matching else the client might expect more
+/// or less content when trying to receive the file.
 #[derive(Default, Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct FileInfo {
     pub file_name: String,
@@ -87,6 +97,7 @@ pub struct FileInfo {
     pub last_write_time: u64,
 }
 
+/// Supported attributes for directories
 #[derive(Default, Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct DirectoryInfo {
     pub directory_name: String,
@@ -97,8 +108,20 @@ pub struct DirectoryInfo {
     pub last_write_time: u64,
 }
 
+/// Implementation for the data source of the projected file system.
 pub trait ProjectedFileSystemSource {
+    /// Return a list of directory entries contained at that specific path.
+    /// Return an empty list to indicate that the directory is empty or does not exists.
     fn list_directory(&self, path: &Path) -> Vec<DirectoryEntry>;
+
+    /// Return information about the target path.  
+    /// The path can be any of the previously returned `DirectoryEntry`s.  
+    ///  
+    /// If the target entry does not exists, return `None`.  
+    ///
+    /// Note:  
+    /// The default implementation is for convinience and should be overridden as  
+    /// looping trough all directory entries might come with a performance penalty.
     fn get_directory_entry(&self, path: &Path) -> Option<DirectoryEntry> {
         let directory = path.parent().map(Path::to_path_buf).unwrap_or_default();
         let file_name = path.file_name().map(OsStr::to_string_lossy)?;
@@ -108,6 +131,11 @@ pub trait ProjectedFileSystemSource {
             .find(|entry| entry.name() == file_name)
     }
 
+    /// Return a stream to the file contents of `path`.  
+    ///   
+    /// Note:
+    /// The returned Box<dyn Read> must respect the byte_offset and will not be read  
+    /// past `length` bytes.
     fn stream_file_content(
         &self,
         path: &Path,
@@ -165,6 +193,8 @@ pub enum Notification {
 }
 
 impl Notification {
+    /// Returns `true` if the action can be cancelled  
+    /// by returning `ControlFlow::Break`
     pub fn is_cancelable(&self) -> bool {
         #[allow(clippy::match_like_matches_macro)]
         match self {
