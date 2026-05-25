@@ -2,6 +2,7 @@ use std::ffi::c_void;
 
 use windows::{
     core::{
+        Param,
         GUID,
         PCWSTR,
     },
@@ -25,38 +26,51 @@ pub trait ProjectedFSLibrary {
     ) -> *mut c_void;
 
     unsafe fn prj_free_aligned_buffer(&self, buffer: *const c_void);
-    unsafe fn prj_file_name_compare(&self, filename1: PCWSTR, filename2: PCWSTR) -> i32;
+    unsafe fn prj_file_name_compare<P0, P1>(&self, filename1: P0, filename2: P1) -> i32
+    where
+        P0: Param<PCWSTR>,
+        P1: Param<PCWSTR>;
 
-    unsafe fn prj_file_name_match(&self, filenametocheck: PCWSTR, pattern: PCWSTR) -> bool;
+    unsafe fn prj_file_name_match<P0, P1>(&self, filenametocheck: P0, pattern: P1) -> bool
+    where
+        P0: Param<PCWSTR>,
+        P1: Param<PCWSTR>;
 
-    unsafe fn prj_mark_directory_as_placeholder(
+    unsafe fn prj_mark_directory_as_placeholder<P0, P1>(
         &self,
-        rootpathname: PCWSTR,
-        targetpathname: PCWSTR,
+        rootpathname: P0,
+        targetpathname: P1,
         versioninfo: Option<*const PRJ_PLACEHOLDER_VERSION_INFO>,
         virtualizationinstanceid: *const GUID,
-    ) -> windows::core::Result<()>;
+    ) -> windows::core::Result<()>
+    where
+        P0: Param<PCWSTR>,
+        P1: Param<PCWSTR>;
 
-    unsafe fn prj_start_virtualizing(
+    unsafe fn prj_start_virtualizing<P0>(
         &self,
-        virtualizationrootpath: PCWSTR,
+        virtualizationrootpath: P0,
         callbacks: *const PRJ_CALLBACKS,
         instancecontext: Option<*const ::core::ffi::c_void>,
         options: Option<*const PRJ_STARTVIRTUALIZING_OPTIONS>,
-    ) -> windows::core::Result<PRJ_NAMESPACE_VIRTUALIZATION_CONTEXT>;
+    ) -> windows::core::Result<PRJ_NAMESPACE_VIRTUALIZATION_CONTEXT>
+    where
+        P0: Param<PCWSTR>;
 
     unsafe fn prj_stop_virtualizing(
         &self,
         namespacevirtualizationcontext: PRJ_NAMESPACE_VIRTUALIZATION_CONTEXT,
     );
 
-    unsafe fn prj_fill_dir_entry_buffer2(
+    unsafe fn prj_fill_dir_entry_buffer2<P0>(
         &self,
         direntrybufferhandle: PRJ_DIR_ENTRY_BUFFER_HANDLE,
-        filename: PCWSTR,
+        filename: P0,
         filebasicinfo: Option<*const PRJ_FILE_BASIC_INFO>,
         extendedinfo: Option<*const PRJ_EXTENDED_INFO>,
-    ) -> windows::core::Result<()>;
+    ) -> windows::core::Result<()>
+    where
+        P0: Param<PCWSTR>;
 
     unsafe fn prj_write_file_data(
         &self,
@@ -67,23 +81,29 @@ pub trait ProjectedFSLibrary {
         length: u32,
     ) -> windows::core::Result<()>;
 
-    unsafe fn prj_write_placeholder_info(
+    unsafe fn prj_write_placeholder_info<P0>(
         &self,
         namespacevirtualizationcontext: PRJ_NAMESPACE_VIRTUALIZATION_CONTEXT,
-        destinationfilename: PCWSTR,
+        destinationfilename: P0,
         placeholderinfo: *const PRJ_PLACEHOLDER_INFO,
         placeholderinfosize: u32,
-    ) -> windows::core::Result<()>;
+    ) -> windows::core::Result<()>
+    where
+        P0: Param<PCWSTR>;
 
-    unsafe fn prj_write_placeholder_info2(
+    unsafe fn prj_write_placeholder_info2<P0>(
         &self,
         namespacevirtualizationcontext: PRJ_NAMESPACE_VIRTUALIZATION_CONTEXT,
-        destinationfilename: PCWSTR,
+        destinationfilename: P0,
         placeholderinfo: *const PRJ_PLACEHOLDER_INFO,
         placeholderinfosize: u32,
         extendedinfo: ::core::option::Option<*const PRJ_EXTENDED_INFO>,
-    ) -> windows::core::Result<()>;
+    ) -> windows::core::Result<()>
+    where
+        P0: Param<PCWSTR>;
 }
+
+pub use lib_impl::Library as LibraryImpl;
 
 #[cfg(not(feature = "dynamic-import"))]
 mod lib_impl {
@@ -94,6 +114,7 @@ mod lib_impl {
 
     use windows::{
         core::{
+            Param,
             GUID,
             PCWSTR,
         },
@@ -112,6 +133,7 @@ mod lib_impl {
     use super::ProjectedFSLibrary;
 
     pub struct StaticallyLinkedLibrary;
+    pub use StaticallyLinkedLibrary as Library;
 
     impl ProjectedFSLibrary for StaticallyLinkedLibrary {
         unsafe fn prj_allocate_aligned_buffer(
@@ -128,23 +150,35 @@ mod lib_impl {
             PrjFreeAlignedBuffer(buffer)
         }
 
-        unsafe fn prj_file_name_compare(&self, filename1: PCWSTR, filename2: PCWSTR) -> i32 {
+        unsafe fn prj_file_name_compare<P0, P1>(&self, filename1: P0, filename2: P1) -> i32
+        where
+            P0: Param<PCWSTR>,
+            P1: Param<PCWSTR>,
+        {
             use windows::Win32::Storage::ProjectedFileSystem::PrjFileNameCompare;
             PrjFileNameCompare(filename1, filename2)
         }
 
-        unsafe fn prj_file_name_match(&self, filenametocheck: PCWSTR, pattern: PCWSTR) -> bool {
+        unsafe fn prj_file_name_match<P0, P1>(&self, filenametocheck: P0, pattern: P1) -> bool
+        where
+            P0: Param<PCWSTR>,
+            P1: Param<PCWSTR>,
+        {
             use windows::Win32::Storage::ProjectedFileSystem::PrjFileNameMatch;
             PrjFileNameMatch(filenametocheck, pattern)
         }
 
-        unsafe fn prj_mark_directory_as_placeholder(
+        unsafe fn prj_mark_directory_as_placeholder<P0, P1>(
             &self,
-            rootpathname: PCWSTR,
-            targetpathname: PCWSTR,
+            rootpathname: P0,
+            targetpathname: P1,
             versioninfo: Option<*const PRJ_PLACEHOLDER_VERSION_INFO>,
             virtualizationinstanceid: *const GUID,
-        ) -> windows::core::Result<()> {
+        ) -> windows::core::Result<()>
+        where
+            P0: Param<PCWSTR>,
+            P1: Param<PCWSTR>,
+        {
             use windows::Win32::Storage::ProjectedFileSystem::PrjMarkDirectoryAsPlaceholder;
             PrjMarkDirectoryAsPlaceholder(
                 rootpathname,
@@ -154,13 +188,16 @@ mod lib_impl {
             )
         }
 
-        unsafe fn prj_start_virtualizing(
+        unsafe fn prj_start_virtualizing<P0>(
             &self,
-            virtualizationrootpath: PCWSTR,
+            virtualizationrootpath: P0,
             callbacks: *const PRJ_CALLBACKS,
             instancecontext: Option<*const core::ffi::c_void>,
             options: Option<*const PRJ_STARTVIRTUALIZING_OPTIONS>,
-        ) -> windows::core::Result<PRJ_NAMESPACE_VIRTUALIZATION_CONTEXT> {
+        ) -> windows::core::Result<PRJ_NAMESPACE_VIRTUALIZATION_CONTEXT>
+        where
+            P0: Param<PCWSTR>,
+        {
             use windows::Win32::Storage::ProjectedFileSystem::PrjStartVirtualizing;
             PrjStartVirtualizing(virtualizationrootpath, callbacks, instancecontext, options)
         }
@@ -173,13 +210,16 @@ mod lib_impl {
             PrjStopVirtualizing(namespacevirtualizationcontext)
         }
 
-        unsafe fn prj_fill_dir_entry_buffer2(
+        unsafe fn prj_fill_dir_entry_buffer2<P0>(
             &self,
             direntrybufferhandle: PRJ_DIR_ENTRY_BUFFER_HANDLE,
-            filename: PCWSTR,
+            filename: P0,
             filebasicinfo: Option<*const PRJ_FILE_BASIC_INFO>,
             extendedinfo: Option<*const PRJ_EXTENDED_INFO>,
-        ) -> windows::core::Result<()> {
+        ) -> windows::core::Result<()>
+        where
+            P0: Param<PCWSTR>,
+        {
             use windows::Win32::Storage::ProjectedFileSystem::PrjFillDirEntryBuffer2;
             PrjFillDirEntryBuffer2(direntrybufferhandle, filename, filebasicinfo, extendedinfo)
         }
@@ -202,13 +242,16 @@ mod lib_impl {
             )
         }
 
-        unsafe fn prj_write_placeholder_info(
+        unsafe fn prj_write_placeholder_info<P0>(
             &self,
             namespacevirtualizationcontext: PRJ_NAMESPACE_VIRTUALIZATION_CONTEXT,
-            destinationfilename: PCWSTR,
+            destinationfilename: P0,
             placeholderinfo: *const PRJ_PLACEHOLDER_INFO,
             placeholderinfosize: u32,
-        ) -> windows::core::Result<()> {
+        ) -> windows::core::Result<()>
+        where
+            P0: Param<PCWSTR>,
+        {
             use windows::Win32::Storage::ProjectedFileSystem::PrjWritePlaceholderInfo;
             PrjWritePlaceholderInfo(
                 namespacevirtualizationcontext,
@@ -218,14 +261,17 @@ mod lib_impl {
             )
         }
 
-        unsafe fn prj_write_placeholder_info2(
+        unsafe fn prj_write_placeholder_info2<P0>(
             &self,
             namespacevirtualizationcontext: PRJ_NAMESPACE_VIRTUALIZATION_CONTEXT,
-            destinationfilename: PCWSTR,
+            destinationfilename: P0,
             placeholderinfo: *const PRJ_PLACEHOLDER_INFO,
             placeholderinfosize: u32,
             extendedinfo: core::option::Option<*const PRJ_EXTENDED_INFO>,
-        ) -> windows::core::Result<()> {
+        ) -> windows::core::Result<()>
+        where
+            P0: Param<PCWSTR>,
+        {
             use windows::Win32::Storage::ProjectedFileSystem::PrjWritePlaceholderInfo2;
             PrjWritePlaceholderInfo2(
                 namespacevirtualizationcontext,
@@ -237,7 +283,7 @@ mod lib_impl {
         }
     }
 
-    pub fn load_library() -> crate::Result<Arc<dyn ProjectedFSLibrary>> {
+    pub fn load_library() -> crate::Result<Arc<StaticallyLinkedLibrary>> {
         Ok(Arc::new(StaticallyLinkedLibrary))
     }
 }
@@ -252,6 +298,7 @@ mod lib_impl {
 
     use windows::{
         core::{
+            Param,
             GUID,
             HRESULT,
             PCWSTR,
@@ -325,6 +372,8 @@ mod lib_impl {
         }
     }
 
+    pub use DynamicallyLoadedLibrary as Library;
+
     impl ProjectedFSLibrary for DynamicallyLoadedLibrary {
         unsafe fn prj_allocate_aligned_buffer(
             &self,
@@ -338,40 +387,55 @@ mod lib_impl {
             (self.PrjFreeAlignedBuffer)(buffer)
         }
 
-        unsafe fn prj_file_name_compare(&self, filename1: PCWSTR, filename2: PCWSTR) -> i32 {
-            (self.PrjFileNameCompare)(filename1, filename2)
+        unsafe fn prj_file_name_compare<P0, P1>(&self, filename1: P0, filename2: P1) -> i32
+        where
+            P0: Param<PCWSTR>,
+            P1: Param<PCWSTR>,
+        {
+            (self.PrjFileNameCompare)(filename1.param().abi(), filename2.param().abi())
         }
 
-        unsafe fn prj_file_name_match(&self, filenametocheck: PCWSTR, pattern: PCWSTR) -> bool {
-            (self.PrjFileNameMatch)(filenametocheck, pattern)
+        unsafe fn prj_file_name_match<P0, P1>(&self, filenametocheck: P0, pattern: P1) -> bool
+        where
+            P0: Param<PCWSTR>,
+            P1: Param<PCWSTR>,
+        {
+            (self.PrjFileNameMatch)(filenametocheck.param().abi(), pattern.param().abi())
         }
 
-        unsafe fn prj_mark_directory_as_placeholder(
+        unsafe fn prj_mark_directory_as_placeholder<P0, P1>(
             &self,
-            rootpathname: PCWSTR,
-            targetpathname: PCWSTR,
+            rootpathname: P0,
+            targetpathname: P1,
             versioninfo: Option<*const PRJ_PLACEHOLDER_VERSION_INFO>,
             virtualizationinstanceid: *const GUID,
-        ) -> windows::core::Result<()> {
+        ) -> windows::core::Result<()>
+        where
+            P0: Param<PCWSTR>,
+            P1: Param<PCWSTR>,
+        {
             (self.PrjMarkDirectoryAsPlaceholder)(
-                rootpathname,
-                targetpathname,
+                rootpathname.param().abi(),
+                targetpathname.param().abi(),
                 versioninfo.unwrap_or(ptr::null()),
                 virtualizationinstanceid,
             )
             .ok()
         }
 
-        unsafe fn prj_start_virtualizing(
+        unsafe fn prj_start_virtualizing<P0>(
             &self,
-            virtualizationrootpath: PCWSTR,
+            virtualizationrootpath: P0,
             callbacks: *const PRJ_CALLBACKS,
             instancecontext: Option<*const core::ffi::c_void>,
             options: Option<*const PRJ_STARTVIRTUALIZING_OPTIONS>,
-        ) -> windows::core::Result<PRJ_NAMESPACE_VIRTUALIZATION_CONTEXT> {
+        ) -> windows::core::Result<PRJ_NAMESPACE_VIRTUALIZATION_CONTEXT>
+        where
+            P0: Param<PCWSTR>,
+        {
             let mut result = ::std::mem::zeroed();
             (self.PrjStartVirtualizing)(
-                virtualizationrootpath,
+                virtualizationrootpath.param().abi(),
                 callbacks,
                 instancecontext.unwrap_or(ptr::null()),
                 options.unwrap_or(ptr::null()),
@@ -387,16 +451,19 @@ mod lib_impl {
             (self.PrjStopVirtualizing)(namespacevirtualizationcontext)
         }
 
-        unsafe fn prj_fill_dir_entry_buffer2(
+        unsafe fn prj_fill_dir_entry_buffer2<P0>(
             &self,
             direntrybufferhandle: PRJ_DIR_ENTRY_BUFFER_HANDLE,
-            filename: PCWSTR,
+            filename: P0,
             filebasicinfo: Option<*const PRJ_FILE_BASIC_INFO>,
             extendedinfo: Option<*const PRJ_EXTENDED_INFO>,
-        ) -> windows::core::Result<()> {
+        ) -> windows::core::Result<()>
+        where
+            P0: Param<PCWSTR>,
+        {
             (self.PrjFillDirEntryBuffer2)(
                 direntrybufferhandle,
-                filename,
+                filename.param().abi(),
                 filebasicinfo.unwrap_or(ptr::null()),
                 extendedinfo.unwrap_or(ptr::null()),
             )
@@ -421,33 +488,39 @@ mod lib_impl {
             .ok()
         }
 
-        unsafe fn prj_write_placeholder_info(
+        unsafe fn prj_write_placeholder_info<P0>(
             &self,
             namespacevirtualizationcontext: PRJ_NAMESPACE_VIRTUALIZATION_CONTEXT,
-            destinationfilename: PCWSTR,
+            destinationfilename: P0,
             placeholderinfo: *const PRJ_PLACEHOLDER_INFO,
             placeholderinfosize: u32,
-        ) -> windows::core::Result<()> {
+        ) -> windows::core::Result<()>
+        where
+            P0: Param<PCWSTR>,
+        {
             (self.PrjWritePlaceholderInfo)(
                 namespacevirtualizationcontext,
-                destinationfilename,
+                destinationfilename.param().abi(),
                 placeholderinfo,
                 placeholderinfosize,
             )
             .ok()
         }
 
-        unsafe fn prj_write_placeholder_info2(
+        unsafe fn prj_write_placeholder_info2<P0>(
             &self,
             namespacevirtualizationcontext: PRJ_NAMESPACE_VIRTUALIZATION_CONTEXT,
-            destinationfilename: PCWSTR,
+            destinationfilename: P0,
             placeholderinfo: *const PRJ_PLACEHOLDER_INFO,
             placeholderinfosize: u32,
             extendedinfo: Option<*const PRJ_EXTENDED_INFO>,
-        ) -> windows::core::Result<()> {
+        ) -> windows::core::Result<()>
+        where
+            P0: Param<PCWSTR>,
+        {
             (self.PrjWritePlaceholderInfo2)(
                 namespacevirtualizationcontext,
-                destinationfilename,
+                destinationfilename.param().abi(),
                 placeholderinfo,
                 placeholderinfosize,
                 extendedinfo.unwrap_or(ptr::null()),
@@ -456,7 +529,7 @@ mod lib_impl {
         }
     }
 
-    pub fn load_library() -> Result<Arc<dyn ProjectedFSLibrary>> {
+    pub fn load_library() -> Result<Arc<DynamicallyLoadedLibrary>> {
         let library = match unsafe { libloading::Library::new("projectedfslib") } {
             Ok(library) => DynamicallyLoadedLibrary::new(library)?,
             Err(error) => {
