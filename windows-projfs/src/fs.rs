@@ -11,7 +11,6 @@ use std::{
         PathBuf,
     },
     rc::Rc,
-    sync::Arc,
 };
 
 use parking_lot::Mutex;
@@ -135,7 +134,7 @@ impl DirectoryIteration {
 
 pub type RawProjectionContext = Mutex<ProjectionContext>;
 pub struct ProjectionContext {
-    library: Arc<library::LibraryImpl>,
+    library: library::LibraryImpl,
     source: Box<dyn ProjectedFileSystemSource>,
     directory_enumerations: BTreeMap<u128, DirectoryIteration>,
 }
@@ -145,7 +144,7 @@ impl ProjectionContext {
         let old_enumeration = self.directory_enumerations.insert(
             id,
             DirectoryIteration::from_unsorted(
-                &*self.library,
+                &self.library,
                 id,
                 self.source.list_directory(&target),
             ),
@@ -162,7 +161,7 @@ impl ProjectionContext {
 }
 
 pub struct ProjectedFileSystem {
-    library: Arc<library::LibraryImpl>,
+    library: library::LibraryImpl,
     instance_id: GUID,
 
     raw_context: *mut RawProjectionContext,

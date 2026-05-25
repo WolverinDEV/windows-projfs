@@ -107,10 +107,7 @@ pub use lib_impl::Library as LibraryImpl;
 
 #[cfg(not(feature = "dynamic-import"))]
 mod lib_impl {
-    use std::{
-        ffi::c_void,
-        sync::Arc,
-    };
+    use std::ffi::c_void;
 
     use windows::{
         core::{
@@ -132,6 +129,7 @@ mod lib_impl {
 
     use super::ProjectedFSLibrary;
 
+    #[derive(Clone)]
     pub struct StaticallyLinkedLibrary;
     pub use StaticallyLinkedLibrary as Library;
 
@@ -283,8 +281,8 @@ mod lib_impl {
         }
     }
 
-    pub fn load_library() -> crate::Result<Arc<StaticallyLinkedLibrary>> {
-        Ok(Arc::new(StaticallyLinkedLibrary))
+    pub fn load_library() -> crate::Result<StaticallyLinkedLibrary> {
+        Ok(StaticallyLinkedLibrary)
     }
 }
 
@@ -292,6 +290,7 @@ mod lib_impl {
 mod lib_impl {
     use std::{
         ffi::c_void,
+        ops,
         ptr,
         sync::Arc,
     };
@@ -372,9 +371,20 @@ mod lib_impl {
         }
     }
 
-    pub use DynamicallyLoadedLibrary as Library;
+    #[derive(Clone)]
+    pub struct Library {
+        inner: Arc<DynamicallyLoadedLibrary>,
+    }
 
-    impl ProjectedFSLibrary for DynamicallyLoadedLibrary {
+    impl ops::Deref for Library {
+        type Target = DynamicallyLoadedLibrary;
+
+        fn deref(&self) -> &Self::Target {
+            &self.inner
+        }
+    }
+
+    impl ProjectedFSLibrary for Library {
         unsafe fn prj_allocate_aligned_buffer(
             &self,
             namespacevirtualizationcontext: PRJ_NAMESPACE_VIRTUALIZATION_CONTEXT,
@@ -529,9 +539,11 @@ mod lib_impl {
         }
     }
 
-    pub fn load_library() -> Result<Arc<DynamicallyLoadedLibrary>> {
+    pub fn load_library() -> Result<Library> {
         let library = match unsafe { libloading::Library::new("projectedfslib") } {
-            Ok(library) => DynamicallyLoadedLibrary::new(library)?,
+            Ok(library) => Library {
+                inner: Arc::new(DynamicallyLoadedLibrary::new(library)?),
+            },
             Err(error) => {
                 return Err(match &error {
                     libloading::Error::LoadLibraryExW { .. } => {
@@ -554,7 +566,7 @@ mod lib_impl {
             }
         };
 
-        Ok(Arc::new(library))
+        Ok(library)
     }
 }
 
