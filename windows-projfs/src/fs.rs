@@ -304,7 +304,6 @@ mod native {
         },
         Win32::{
             Foundation::{
-                BOOLEAN,
                 ERROR_FILE_NOT_FOUND,
                 ERROR_INSUFFICIENT_BUFFER,
                 ERROR_OUTOFMEMORY,
@@ -357,7 +356,7 @@ mod native {
 
             match self {
                 Self::Directory(directory) => {
-                    basic_info.IsDirectory = BOOLEAN::from(true);
+                    basic_info.IsDirectory = true;
                     basic_info.FileAttributes = directory.directory_attributes;
 
                     basic_info.CreationTime = directory.creation_time as i64;
@@ -368,7 +367,7 @@ mod native {
                     basic_info.ChangeTime = directory.last_write_time as i64;
                 }
                 Self::File(file) => {
-                    basic_info.IsDirectory = BOOLEAN::from(false);
+                    basic_info.IsDirectory = false;
 
                     basic_info.FileSize = file.file_size as i64;
                     basic_info.FileAttributes = file.file_attributes;
@@ -479,7 +478,10 @@ mod native {
 
                 let file_match = if let Some(search_expression) = enumeration.search_expression.as_ref() {
                     unsafe {
-                        library.prj_file_name_match(PCWSTR(name.as_ptr()), PCWSTR(search_expression.as_ptr())).as_bool()
+                        library.prj_file_name_match(
+                            PCWSTR(name.as_ptr()),
+                            PCWSTR(search_expression.as_ptr()),
+                        )
                     }
                 } else {
                     true
@@ -636,7 +638,7 @@ mod native {
 
     pub unsafe extern "system" fn notification_callback(
         callback_data: *const PRJ_CALLBACK_DATA,
-        is_directory: BOOLEAN,
+        is_directory: bool,
         notification: PRJ_NOTIFICATION,
         destination_filename: PCWSTR,
         _operation_parameters: *mut PRJ_NOTIFICATION_PARAMETERS,
@@ -654,7 +656,7 @@ mod native {
         callback_data.execute(move |callback_data| {
             let target_file = ProjectedFile {
                 file_id: callback_data.file_id.to_u128(),
-                is_directory: is_directory.as_bool(),
+                is_directory,
                 path: callback_data.file_path.clone().unwrap_or_default(),
             };
 
