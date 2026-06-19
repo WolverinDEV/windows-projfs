@@ -1,14 +1,14 @@
-use std::{
-    ffi::c_void,
-    sync::Arc,
-};
+use std::ffi::c_void;
 
 use windows::Win32::Storage::ProjectedFileSystem::PRJ_NAMESPACE_VIRTUALIZATION_CONTEXT;
 
-use crate::library::ProjectedFSLibrary;
+use crate::library::{
+    LibraryImpl,
+    ProjectedFSLibrary,
+};
 
 pub struct PrjAlignedBuffer {
-    library: Arc<dyn ProjectedFSLibrary>,
+    library: LibraryImpl,
 
     length: usize,
     raw_buffer: *mut c_void,
@@ -16,7 +16,7 @@ pub struct PrjAlignedBuffer {
 
 impl PrjAlignedBuffer {
     pub fn allocate(
-        library: Arc<dyn ProjectedFSLibrary>,
+        library: LibraryImpl,
         context: PRJ_NAMESPACE_VIRTUALIZATION_CONTEXT,
         length: usize,
     ) -> Option<Self> {
